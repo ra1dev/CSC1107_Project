@@ -324,25 +324,75 @@ bash scripts/text_demo.sh
 
 ## TLS Demo
 
-Generate a self-signed demo certificate on the receiver machine:
+The TLS demo uses two terminals or two machines:
+
+- **Receiver machine**: laptop/server that listens for encrypted JSON stats.
+- **Sender machine**: Raspberry Pi running `kbmonitor` and `user/kbmon_tls`.
+
+The Raspberry Pi must have the module loaded before sending TLS data:
+
+```bash
+cd ~/linux/CSC1107OS/kbmonitor
+sudo rmmod kbmonitor 2>/dev/null || true
+make clean
+make
+sudo insmod kernel/kbmonitor.ko
+sudo chmod 666 /dev/kbmonitor
+./user/kbmon summary
+./user/kbmon keys
+```
+
+### 1. Start The TLS Receiver
+
+On the receiver machine, generate a self-signed demo certificate:
 
 ```bash
 bash scripts/generate_tls_cert.sh
 ```
 
-Start the TLS receiver:
+Start the receiver on port `8443`:
 
 ```bash
 python3 server/tls_receiver.py --cert server/server.crt --key server/server.key --port 8443
 ```
 
-Send one encrypted stats sample from the Pi:
+Expected receiver message:
+
+```text
+[tls-receiver] listening on 0.0.0.0:8443
+```
+
+Find the receiver machine's IP address.
+
+Linux:
+
+```bash
+ip addr
+```
+
+Windows PowerShell:
+
+```powershell
+ipconfig
+```
+
+Use the receiver's IPv4 address as `<SERVER_IP>`.
+
+### 2. Send Stats From The Raspberry Pi
+
+Send one encrypted stats sample:
 
 ```bash
 ./user/kbmon_tls <SERVER_IP> 8443 --insecure
 ```
 
-Or:
+Example:
+
+```bash
+./user/kbmon_tls 192.168.1.50 8443 --insecure
+```
+
+Or use the helper:
 
 ```bash
 bash scripts/tls_client_demo.sh <SERVER_IP> 8443
@@ -354,9 +404,56 @@ Send repeated samples:
 ./user/kbmon_tls <SERVER_IP> 8443 --interval 5 --count 10 --insecure
 ```
 
+Expected sender output:
+
+```text
+sent TLS stats sample 1 to 192.168.1.50:8443
+```
+
+Expected receiver output is JSON similar to:
+
+```json
+{
+  "schema": "kbmonitor.stats.v1",
+  "source": "kbmonitor",
+  "privacy": {
+    "exports_text": false
+  },
+  "summary": {
+    "total_presses": 42,
+    "active_keyboards": 1,
+    "repeat_events": 0
+  },
+  "analytics": {
+    "categories": {
+      "letters": 20,
+      "digits": 3
+    },
+    "top_keys": [
+      {
+        "key": "SPACE",
+        "count": 8
+      }
+    ]
+  }
+}
+```
+
 `--insecure` is intended for the self-signed lab demo. It still uses an
 encrypted TLS connection, but disables peer certificate verification. For stricter
 verification, use `--ca-file`.
+
+Important privacy rule: `kbmon_tls` exports only Level 1 summary and Level 2 key
+analytics. It does not read `view text`, does not send the Level 3 text buffer,
+and the JSON includes `"exports_text": false`.
+
+If the connection fails:
+
+- Confirm both machines are on the same network.
+- Confirm `<SERVER_IP>` is the receiver IP, not the Pi IP.
+- Confirm the receiver script is still running.
+- Allow inbound TCP port `8443` through the receiver firewall if needed.
+- Confirm `/dev/kbmonitor` exists on the Pi.
 
 ## Project Structure
 
