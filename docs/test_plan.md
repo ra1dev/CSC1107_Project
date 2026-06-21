@@ -14,7 +14,7 @@
 
 | Test | Command | Expected Result |
 | --- | --- | --- |
-| Load module | `bash scripts/load.sh` | Module loads and `/dev/kbmonitor` exists |
+| Load module | `bash scripts/load.sh` | Module loads and `/dev/kbmonitor` plus `/dev/kbmonitor_log` exist |
 | Confirm module | `lsmod \| grep kbmonitor` | `kbmonitor` is listed |
 | Check logs | `sudo dmesg \| tail` | Load and device creation logs appear |
 | Unload module | `bash scripts/unload.sh` | Module unloads cleanly |
@@ -26,9 +26,11 @@
 | --- | --- | --- |
 | Read summary | `./user/kbmon summary` | Valid key-value stats are printed |
 | Manual read | `cat /dev/kbmonitor` | Summary stats are printed |
+| Manual log read | `cat /dev/kbmonitor_log` | Recent keypress log entries are printed |
 | Select view | `echo "view summary" > /dev/kbmonitor` | Command succeeds |
 | Status view | `./user/kbmon status` | Driver/device status is printed |
 | Event view | `./user/kbmon events` | Recent keypress history is printed |
+| Log view | `./user/kbmon log` | Recent keypress log metadata is printed |
 | Report export | `./user/kbmon export` | JSON evidence is printed and contains `"exports_text": false` |
 | Reset | `./user/kbmon reset` | Counters return to zero |
 | Invalid command | `echo bad > /dev/kbmonitor` | Command fails and `dmesg` logs warning |
@@ -45,6 +47,8 @@
 | Ring buffer | Press more than 64 keys | `buffered_events=64`, `buffer_dropped` increases |
 | Rate stats | Press keys quickly, run summary | `presses_last_10s`, `presses_per_minute`, and `peak_presses_per_second` are present |
 | Event history labels | Press known keys, run `./user/kbmon events` | Recent events show key labels and Linux key codes |
+| Linux key-name log | Press `A` and Enter, run `./user/kbmon log` | Output includes `key=KEY_A` and `key=KEY_ENTER` |
+| Log ring buffer | Press more than 128 keys, run `./user/kbmon log` | `events=128`, `log_dropped` increases |
 
 ## Level 2 Analytics Tests
 

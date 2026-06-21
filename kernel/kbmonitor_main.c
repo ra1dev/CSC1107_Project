@@ -24,6 +24,8 @@
 #include <linux/uaccess.h>
 #include <linux/version.h>
 
+#include "kbmonitor_log.h"
+
 #define KBMON_DEVICE_NAME "kbmonitor"
 #define KBMON_CLASS_NAME  "kbmonitor"
 #define KBMON_MAX_CMD     64
@@ -970,6 +972,7 @@ static int kbmon_format_status(char *out, int size,
 			 "driver=kbmonitor\n"
 			 "view=status\n"
 			 "device=/dev/%s\n"
+			 "log_device=/dev/kbmonitor_log\n"
 			 "module_loaded=yes\n"
 			 "active_keyboards=%d\n"
 			 "current_view=%s\n"
@@ -1096,8 +1099,11 @@ static ssize_t kbmon_write(struct file *file, const char __user *user_buf,
 	cmd = strim(cmd_buf);
 
 	if (!strcmp(cmd, "reset")) {
+		u64 now = get_jiffies_64();
+
 		spin_lock_irqsave(&kbmon.lock, flags);
-		kbmon_reset_locked(get_jiffies_64());
+		kbmon_reset_locked(now);
+		kbmon_log_reset();
 		spin_unlock_irqrestore(&kbmon.lock, flags);
 		*ppos = 0;
 		pr_info("kbmonitor: counters reset from user space\n");
@@ -1264,8 +1270,11 @@ static void kbmon_input_event(struct input_handle *handle, unsigned int type,
 #endif
 
 	if (value == 1) {
+		u64 now = get_jiffies_64();
+
 		spin_lock_irqsave(&kbmon.lock, flags);
-		kbmon_record_press_locked(get_jiffies_64(), code);
+		kbmon_record_press_locked(now, code);
+		kbmon_log_record(kbmon.start_jiffies, now, code);
 		total = kbmon.total_presses;
 		spin_unlock_irqrestore(&kbmon.lock, flags);
 
@@ -1418,10 +1427,19 @@ static int __init kbmon_init(void)
 		return err;
 	}
 
+	err = kbmon_log_chrdev_init(kbmon_class);
+	if (err) {
+		pr_err("kbmonitor: failed to create log character device: %d\n",
+		       err);
+		kbmon_chrdev_exit();
+		return err;
+	}
+
 	err = input_register_handler(&kbmon_input_handler);
 	if (err) {
 		pr_err("kbmonitor: failed to register input handler: %d\n",
 		       err);
+		kbmon_log_chrdev_exit(kbmon_class);
 		kbmon_chrdev_exit();
 		return err;
 	}
@@ -1434,6 +1452,7 @@ static int __init kbmon_init(void)
 static void __exit kbmon_exit(void)
 {
 	input_unregister_handler(&kbmon_input_handler);
+	kbmon_log_chrdev_exit(kbmon_class);
 	kbmon_chrdev_exit();
 	pr_info("kbmonitor: module unloaded\n");
 }

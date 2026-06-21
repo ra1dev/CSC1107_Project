@@ -38,6 +38,10 @@ echo "[demo] Recent event history"
 "$ROOT/user/kbmon" events
 
 echo
+echo "[demo] Recent Linux key-name log"
+"$ROOT/user/kbmon" log
+
+echo
 echo "[demo] Report evidence JSON export"
 "$ROOT/user/kbmon" export
 

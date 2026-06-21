@@ -40,7 +40,9 @@ run bash "$ROOT/scripts/load.sh"
 echo
 echo "[validate] Device checks"
 test -e /dev/kbmonitor
+test -e /dev/kbmonitor_log
 ls -l /dev/kbmonitor
+ls -l /dev/kbmonitor_log
 
 echo
 echo "[validate] User-space command checks"
@@ -49,6 +51,7 @@ run "$ROOT/user/kbmon" summary
 run "$ROOT/user/kbmon" keys
 run "$ROOT/user/kbmon" heatmap
 run "$ROOT/user/kbmon" events
+run "$ROOT/user/kbmon" log
 run "$ROOT/user/kbmon" export
 run "$ROOT/user/kbmon" reset
 
@@ -58,6 +61,7 @@ echo "view status" > /dev/kbmonitor
 cat /dev/kbmonitor
 echo "view events" > /dev/kbmonitor
 cat /dev/kbmonitor
+cat /dev/kbmonitor_log
 
 echo
 echo "[validate] Kernel log sample"

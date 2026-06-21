@@ -16,6 +16,7 @@
 #include <unistd.h>
 
 #define KBMON_DEVICE "/dev/kbmonitor"
+#define KBMON_LOG_DEVICE "/dev/kbmonitor_log"
 #define KBMON_READ_BUF 16384
 #define KBMON_KEY_COUNT 768
 #define KBMON_TOP_KEYS 10
@@ -202,6 +203,7 @@ static void usage(const char *prog)
 		"  %s heatmap              Render keyboard layout with per-key counts\n"
 		"  %s counts               Alias for heatmap\n"
 		"  %s events               Show recent keypress event history\n"
+		"  %s log                  Print recent keypress log entries\n"
 		"  %s status               Show driver/device status\n"
 		"  %s export               Print report-friendly JSON evidence\n"
 		"  %s raw-keys             Print raw driver key analytics\n"
@@ -213,7 +215,7 @@ static void usage(const char *prog)
 		"\n"
 		"Default command: summary\n",
 		prog, prog, prog, prog, prog, prog, prog, prog, prog, prog,
-		prog, prog, prog);
+		prog, prog, prog, prog);
 }
 
 static void explain_open_error(void)
@@ -336,6 +338,49 @@ static int show_summary(void)
 static int show_raw_keys(void)
 {
 	return show_view("view keys");
+}
+
+static int show_log(void)
+{
+	char buf[KBMON_READ_BUF];
+	ssize_t n;
+	int fd;
+
+	fd = open(KBMON_LOG_DEVICE, O_RDONLY);
+	if (fd < 0) {
+		if (errno == ENOENT) {
+			fprintf(stderr,
+				"%s does not exist. Load the module first, for example:\n"
+				"  sudo insmod kernel/kbmonitor.ko\n",
+				KBMON_LOG_DEVICE);
+		} else if (errno == EACCES) {
+			fprintf(stderr,
+				"Permission denied opening %s. Try sudo, or run:\n"
+				"  sudo chmod 666 %s\n",
+				KBMON_LOG_DEVICE, KBMON_LOG_DEVICE);
+		} else {
+			perror("open");
+		}
+		return 1;
+	}
+
+	n = read(fd, buf, sizeof(buf) - 1);
+	if (n < 0) {
+		perror("read");
+		close(fd);
+		return 1;
+	}
+
+	if (n == 0) {
+		fprintf(stderr, "No log returned from %s\n", KBMON_LOG_DEVICE);
+		close(fd);
+		return 1;
+	}
+
+	buf[n] = '\0';
+	fputs(buf, stdout);
+	close(fd);
+	return 0;
 }
 
 static int reset_and_show(void)
@@ -967,6 +1012,9 @@ int main(int argc, char **argv)
 
 	if (!strcmp(cmd, "events"))
 		return show_events();
+
+	if (!strcmp(cmd, "log"))
+		return show_log();
 
 	if (!strcmp(cmd, "status"))
 		return show_status();

@@ -1,9 +1,10 @@
 # CSC1107 Project 2: USB Keyboard Activity Logger Driver
 
 `kbmonitor` is a Raspberry Pi Linux kernel module project for CSC1107 Operating
-Systems Project 2. It creates a character device at `/dev/kbmonitor`, observes
-USB keyboard activity through the Linux input subsystem, and exposes keyboard
-activity statistics to user-space C programs.
+Systems Project 2. It creates character devices at `/dev/kbmonitor` and
+`/dev/kbmonitor_log`, observes USB keyboard activity through the Linux input
+subsystem, and exposes keyboard activity statistics plus a bounded Linux
+key-name log to user-space C programs.
 
 The project does **not** replace the real Linux keyboard driver. The normal USB
 HID keyboard driver still handles typing; `kbmonitor` passively observes input
@@ -14,10 +15,11 @@ statistics export.
 
 ### Core Driver
 
-- Loadable kernel module: `kernel/kbmonitor.c`
+- Loadable kernel module main source: `kernel/kbmonitor_main.c`
+- Separate keypress log source: `kernel/kbmonitor_log.c`
 - Lab-style character device registration using `alloc_chrdev_region`, `cdev`,
   `class_create`, and `device_create`
-- Device node: `/dev/kbmonitor`
+- Device nodes: `/dev/kbmonitor` and `/dev/kbmonitor_log`
 - Linux input subsystem handler for keyboard-like USB input devices
 - `read()` interface for retrieving statistics
 - `write()` interface for commands such as `reset`, `view summary`, and
@@ -119,6 +121,27 @@ NO    KEY        CODE   SINCE_START  AGE
 1     A          30     14022ms      3050ms ago
 2     SPACE      57     14610ms      2462ms ago
 3     ENTER      28     17042ms      30ms ago
+```
+
+Show recent keypress log entries using Linux key names:
+
+```bash
+./user/kbmon log
+```
+
+Example:
+
+```text
+driver=kbmonitor
+view=log
+events=3
+log_capacity=128
+log_dropped=0
+log_begin
+seq=0 time_ms=14022 code=30 key=KEY_A
+seq=1 time_ms=14610 code=57 key=KEY_SPACE
+seq=2 time_ms=17042 code=28 key=KEY_ENTER
+log_end
 ```
 
 For raw machine-readable driver output:
@@ -317,6 +340,7 @@ From the project root after loading the module:
 ./user/kbmon keys
 ./user/kbmon heatmap
 ./user/kbmon events
+./user/kbmon log
 ./user/kbmon status
 ./user/kbmon export
 ./user/kbmon reset
@@ -334,6 +358,8 @@ cat /dev/kbmonitor
 
 echo "view events" > /dev/kbmonitor
 cat /dev/kbmonitor
+
+cat /dev/kbmonitor_log
 
 echo "view status" > /dev/kbmonitor
 cat /dev/kbmonitor
@@ -361,11 +387,12 @@ Expected flow:
 7. Show Level 2 key analytics.
 8. Show heatmap with per-key counts.
 9. Show recent event history.
-10. Show report evidence JSON export.
-11. Demonstrate direct `write()` to `/dev/kbmonitor`.
-12. Reset counters.
-13. Show recent `dmesg`.
-14. Unload cleanly.
+10. Show recent Linux key-name log entries.
+11. Show report evidence JSON export.
+12. Demonstrate direct `write()` to `/dev/kbmonitor`.
+13. Reset counters.
+14. Show recent `dmesg`.
+15. Unload cleanly.
 
 Optional Level 3 demo:
 
@@ -528,7 +555,9 @@ If the connection fails:
 
 ```text
 kernel/
-  kbmonitor.c          Kernel module and character device driver
+  kbmonitor_main.c     Kernel module and stats character device driver
+  kbmonitor_log.c      Separate bounded Linux key-name log device
+  kbmonitor_log.h      Shared log function declarations
   Makefile            Kernel module kbuild file
 
 user/
@@ -541,7 +570,7 @@ server/
 
 scripts/
   build.sh            Build helper
-  load.sh             Load module and prepare /dev/kbmonitor
+  load.sh             Load module and prepare device nodes
   unload.sh           Remove module
   demo.sh             Main coursework demo flow
   text_demo.sh        Optional Level 3 demo
@@ -575,13 +604,15 @@ Safety and privacy:
 
 - The module does not replace the normal keyboard driver.
 - Level 1 and Level 2 do not reconstruct typed text.
+- `/dev/kbmonitor_log` stores bounded recent keypress events as Linux key names,
+  not reconstructed text.
 - Level 3 is compile-time gated and runtime opt-in.
 - TLS export reads only `view summary` and `view keys`.
 - TLS export never sends reconstructed text.
 
 ## Troubleshooting
 
-If `/dev/kbmonitor` does not exist:
+If `/dev/kbmonitor` or `/dev/kbmonitor_log` does not exist:
 
 ```bash
 lsmod | grep kbmonitor

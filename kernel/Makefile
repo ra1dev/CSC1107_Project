@@ -1,4 +1,5 @@
 obj-m += kbmonitor.o
+kbmonitor-y := kbmonitor_main.o kbmonitor_log.o
 
 ifeq ($(TEXT_MODE),1)
 ccflags-y += -DENABLE_TEXT_MODE
