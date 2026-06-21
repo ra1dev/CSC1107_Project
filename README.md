@@ -209,10 +209,11 @@ Safer guided demo:
 bash scripts/text_demo.sh
 ```
 
-### TLS Statistics Export
+### TLS Key-Name Log Export
 
-The TLS exporter sends only Level 1 and Level 2 statistics. It does not read or
-send `view text`.
+The TLS exporter opens one TLS connection, watches `/dev/kbmonitor_log`, and
+streams new Linux key-name events such as `KEY_A` and `KEY_ENTER` as JSON
+lines. It does not read or send `view text`.
 
 Implemented files:
 
@@ -223,11 +224,11 @@ Implemented files:
 
 The exported JSON includes:
 
-- summary totals
-- key categories
-- top keys
-- per-key counts
-- explicit privacy marker: `"exports_text": false`
+- a `stream_start` JSON line with log metadata
+- one `key_event` JSON line per new key-name entry
+- event sequence number, timestamp, code, and key name
+- explicit privacy markers: `"exports_key_names": true` and
+  `"exports_text": false`
 
 ## Requirements
 
@@ -408,7 +409,7 @@ bash scripts/text_demo.sh
 
 The TLS demo uses two terminals or two machines:
 
-- **Receiver machine**: laptop/server that listens for encrypted JSON stats.
+- **Receiver machine**: laptop/server that listens for encrypted JSON lines.
 - **Sender machine**: Raspberry Pi running `kbmonitor` and `user/kbmon_tls`.
 
 The Raspberry Pi must have the module loaded before sending TLS data:
@@ -460,9 +461,9 @@ ipconfig
 
 Use the receiver's IPv4 address as `<SERVER_IP>`.
 
-### 2. Send Stats From The Raspberry Pi
+### 2. Send Key-Name Logs From The Raspberry Pi
 
-Send one encrypted stats sample:
+Start the encrypted key-name event stream:
 
 ```bash
 ./user/kbmon_tls <SERVER_IP> 8443 --insecure
@@ -480,10 +481,10 @@ Or use the helper:
 bash scripts/tls_client_demo.sh <SERVER_IP> 8443
 ```
 
-Send repeated samples:
+Stream ten new key events and then exit:
 
 ```bash
-./user/kbmon_tls <SERVER_IP> 8443 --interval 5 --count 10 --insecure
+./user/kbmon_tls <SERVER_IP> 8443 --interval 1 --count 10 --insecure
 ```
 
 Verified self-signed demo mode:
@@ -502,36 +503,15 @@ bash scripts/tls_client_demo.sh <SERVER_IP> 8443 --verify
 Expected sender output:
 
 ```text
-sent TLS stats sample 1 to 192.168.1.50:8443
+streaming TLS key log events to 192.168.1.50:8443
+sent key event seq=12 key=KEY_A to 192.168.1.50:8443
 ```
 
-Expected receiver output is JSON similar to:
+Expected receiver output is newline-delimited JSON similar to:
 
 ```json
-{
-  "schema": "kbmonitor.stats.v1",
-  "source": "kbmonitor",
-  "privacy": {
-    "exports_text": false
-  },
-  "summary": {
-    "total_presses": 42,
-    "active_keyboards": 1,
-    "repeat_events": 0
-  },
-  "analytics": {
-    "categories": {
-      "letters": 20,
-      "digits": 3
-    },
-    "top_keys": [
-      {
-        "key": "SPACE",
-        "count": 8
-      }
-    ]
-  }
-}
+{"schema":"kbmonitor.keylog.stream.v1","type":"stream_start","source":"kbmonitor_log","device":"/dev/kbmonitor_log","host":"raspberrypi","unix_time":1782144000,"privacy":{"exports_key_names":true,"exports_text":false},"log":{"events":2,"capacity":128,"dropped":0,"latest_seq":11}}
+{"schema":"kbmonitor.keylog.stream.v1","type":"key_event","source":"kbmonitor_log","unix_time":1782144001,"event":{"seq":12,"time_ms":14022,"code":30,"key":"KEY_A"}}
 ```
 
 `--insecure` is intended only for quick self-signed lab demos. It still uses an
@@ -539,9 +519,9 @@ encrypted TLS connection, but disables peer certificate verification. For the
 stronger demo path, use `--ca-file server/server.crt --server-name
 kbmonitor-demo`.
 
-Important privacy rule: `kbmon_tls` exports only Level 1 summary and Level 2 key
-analytics. It does not read `view text`, does not send the Level 3 text buffer,
-and the JSON includes `"exports_text": false`.
+Important privacy rule: `kbmon_tls` exports Linux key-name log entries from
+`/dev/kbmonitor_log`. It does not read `view text`, does not send the Level 3
+text buffer, and the JSON includes `"exports_text": false`.
 
 If the connection fails:
 
@@ -607,7 +587,7 @@ Safety and privacy:
 - `/dev/kbmonitor_log` stores bounded recent keypress events as Linux key names,
   not reconstructed text.
 - Level 3 is compile-time gated and runtime opt-in.
-- TLS export reads only `view summary` and `view keys`.
+- TLS export streams new `/dev/kbmonitor_log` key-name entries.
 - TLS export never sends reconstructed text.
 
 ## Troubleshooting
