@@ -17,7 +17,7 @@ if [[ ! -x "$ROOT/user/kbmon_tls" ]]; then
   make -C "$ROOT" all
 fi
 
-echo "[tls-client] Sending Level 1/2 stats only to $SERVER_IP:$PORT"
+echo "[tls-client] Streaming live key-name log events to $SERVER_IP:$PORT"
 if [[ "$VERIFY_MODE" == "--verify" ]]; then
   "$ROOT/user/kbmon_tls" "$SERVER_IP" "$PORT" \
     --ca-file "$ROOT/server/server.crt" \

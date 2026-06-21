@@ -117,13 +117,13 @@ Send from Raspberry Pi:
 | --- | --- | --- |
 | TLS client builds | `make` | `user/kbmon_tls` is created |
 | Receiver starts | Run `server/tls_receiver.py` | Server listens on port 8443 |
-| Encrypted send | Run `./user/kbmon_tls <SERVER_IP> 8443 --insecure` | Receiver prints JSON payload |
+| Encrypted stream | Run `./user/kbmon_tls <SERVER_IP> 8443 --insecure` and press keys | Receiver prints JSON lines as keys arrive |
 | Verified send | Run `./user/kbmon_tls <SERVER_IP> 8443 --ca-file server/server.crt --server-name kbmonitor-demo` | Receiver prints JSON and client verifies the demo certificate |
-| Level 1 included | Inspect JSON | `summary.total_presses` and related fields exist |
-| Level 2 included | Inspect JSON | `analytics.categories`, `top_keys`, and `per_key` exist |
-| Rate stats included | Inspect JSON | `presses_per_minute`, `presses_last_10s`, and `peak_presses_per_second` exist |
+| Key log stream schema included | Inspect JSON lines | `schema` is `kbmonitor.keylog.stream.v1` |
+| Key events included | Inspect `key_event` lines | `event` contains `seq`, `time_ms`, `code`, and `key` fields |
+| Log metadata included | Inspect `stream_start` line | `log.events`, `log.capacity`, and `log.dropped` exist |
 | Text excluded | Inspect JSON | No `text`, `text_begin`, or reconstructed content appears |
-| Repeat send | Run with `--interval 5 --count 3` | Receiver gets three samples |
+| Count-limited stream | Run with `--interval 1 --count 3` and press keys | Receiver gets three key events and the client exits |
 
 ## User-Space Error Handling
 

@@ -1,9 +1,8 @@
 /*
- * kbmon_tls - TLS exporter for kbmonitor Level 1/2 statistics.
+ * kbmon_tls - TLS streamer for kbmonitor key-name log entries.
  *
- * This program reads only "view summary" and "view keys" from /dev/kbmonitor,
- * serializes the statistics as JSON, and sends them to a TLS server. It never
- * reads "view text" and never transmits reconstructed text.
+ * This program reads the bounded Linux key-name log from /dev/kbmonitor_log,
+ * watches for new entries, and streams them to a TLS server as JSON lines.
  */
 
 #define _POSIX_C_SOURCE 200809L
@@ -22,10 +21,8 @@
 #include <time.h>
 #include <unistd.h>
 
-#define KBMON_DEVICE "/dev/kbmonitor"
+#define KBMON_LOG_DEVICE "/dev/kbmonitor_log"
 #define KBMON_READ_BUF 16384
-#define KBMON_KEY_COUNT 768
-#define KBMON_TOP_KEYS 10
 #define JSON_BUF_SIZE 65536
 
 struct options {
@@ -38,26 +35,25 @@ struct options {
 	int count;
 };
 
-struct kb_stats {
-	unsigned long long total_presses;
-	unsigned long long active_keyboards;
-	unsigned long long uptime_ms;
-	unsigned long long last_press_ms;
-	unsigned long long presses_per_minute;
-	unsigned long long presses_last_10s;
-	unsigned long long peak_presses_per_second;
-	unsigned long long repeat_events;
-	unsigned long long buffered_events;
-	unsigned long long buffer_dropped;
-	unsigned long long nonzero_keys;
-	unsigned long long letters;
-	unsigned long long digits;
-	unsigned long long modifiers;
-	unsigned long long navigation;
-	unsigned long long function_keys;
-	unsigned long long control_keys;
-	unsigned long long other_keys;
-	unsigned long long key_counts[KBMON_KEY_COUNT];
+struct tls_client {
+	SSL_CTX *ctx;
+	SSL *ssl;
+	int fd;
+};
+
+struct kb_log_event {
+	unsigned long long seq;
+	unsigned long long time_ms;
+	unsigned int code;
+	char key[64];
+};
+
+struct kb_log_snapshot {
+	unsigned int events;
+	unsigned int log_capacity;
+	unsigned long long log_dropped;
+	struct kb_log_event entries[128];
+	unsigned int entry_count;
 };
 
 static void usage(const char *prog)
@@ -66,182 +62,13 @@ static void usage(const char *prog)
 		"Usage:\n"
 		"  %s HOST PORT [--interval SEC] [--count N] [--ca-file FILE] [--server-name NAME] [--insecure]\n"
 		"\n"
+		"By default, streams new key-name log events until interrupted.\n"
+		"Use --count N to stop after sending N key events.\n"
+		"\n"
 		"Examples:\n"
 		"  %s 192.168.1.20 8443 --insecure\n"
-		"  %s 192.168.1.20 8443 --interval 5 --count 10 --insecure\n",
+		"  %s 192.168.1.20 8443 --interval 1 --count 10 --insecure\n",
 		prog, prog, prog);
-}
-
-static const char *key_label(unsigned int code)
-{
-	switch (code) {
-	case 1:
-		return "ESC";
-	case 2:
-		return "1";
-	case 3:
-		return "2";
-	case 4:
-		return "3";
-	case 5:
-		return "4";
-	case 6:
-		return "5";
-	case 7:
-		return "6";
-	case 8:
-		return "7";
-	case 9:
-		return "8";
-	case 10:
-		return "9";
-	case 11:
-		return "0";
-	case 12:
-		return "MINUS";
-	case 13:
-		return "EQUAL";
-	case 14:
-		return "BACKSPACE";
-	case 15:
-		return "TAB";
-	case 16:
-		return "Q";
-	case 17:
-		return "W";
-	case 18:
-		return "E";
-	case 19:
-		return "R";
-	case 20:
-		return "T";
-	case 21:
-		return "Y";
-	case 22:
-		return "U";
-	case 23:
-		return "I";
-	case 24:
-		return "O";
-	case 25:
-		return "P";
-	case 26:
-		return "LEFTBRACE";
-	case 27:
-		return "RIGHTBRACE";
-	case 28:
-		return "ENTER";
-	case 29:
-		return "LEFTCTRL";
-	case 30:
-		return "A";
-	case 31:
-		return "S";
-	case 32:
-		return "D";
-	case 33:
-		return "F";
-	case 34:
-		return "G";
-	case 35:
-		return "H";
-	case 36:
-		return "J";
-	case 37:
-		return "K";
-	case 38:
-		return "L";
-	case 39:
-		return "SEMICOLON";
-	case 40:
-		return "APOSTROPHE";
-	case 41:
-		return "GRAVE";
-	case 42:
-		return "LEFTSHIFT";
-	case 43:
-		return "BACKSLASH";
-	case 44:
-		return "Z";
-	case 45:
-		return "X";
-	case 46:
-		return "C";
-	case 47:
-		return "V";
-	case 48:
-		return "B";
-	case 49:
-		return "N";
-	case 50:
-		return "M";
-	case 51:
-		return "COMMA";
-	case 52:
-		return "DOT";
-	case 53:
-		return "SLASH";
-	case 54:
-		return "RIGHTSHIFT";
-	case 56:
-		return "LEFTALT";
-	case 57:
-		return "SPACE";
-	case 58:
-		return "CAPSLOCK";
-	case 59:
-		return "F1";
-	case 60:
-		return "F2";
-	case 61:
-		return "F3";
-	case 62:
-		return "F4";
-	case 63:
-		return "F5";
-	case 64:
-		return "F6";
-	case 65:
-		return "F7";
-	case 66:
-		return "F8";
-	case 67:
-		return "F9";
-	case 68:
-		return "F10";
-	case 87:
-		return "F11";
-	case 88:
-		return "F12";
-	case 97:
-		return "RIGHTCTRL";
-	case 100:
-		return "RIGHTALT";
-	case 102:
-		return "HOME";
-	case 103:
-		return "UP";
-	case 104:
-		return "PAGEUP";
-	case 105:
-		return "LEFT";
-	case 106:
-		return "RIGHT";
-	case 107:
-		return "END";
-	case 108:
-		return "DOWN";
-	case 109:
-		return "PAGEDOWN";
-	case 110:
-		return "INSERT";
-	case 111:
-		return "DELETE";
-	default:
-		break;
-	}
-
-	return NULL;
 }
 
 static int appendf(char *buf, size_t cap, size_t *len, const char *fmt, ...)
@@ -263,47 +90,20 @@ static int appendf(char *buf, size_t cap, size_t *len, const char *fmt, ...)
 	return 0;
 }
 
-static int open_device(void)
-{
-	int fd = open(KBMON_DEVICE, O_RDWR);
-
-	if (fd < 0)
-		perror("open " KBMON_DEVICE);
-
-	return fd;
-}
-
-static int write_command(int fd, const char *cmd)
-{
-	size_t len = strlen(cmd);
-	ssize_t written = write(fd, cmd, len);
-
-	if (written < 0) {
-		fprintf(stderr, "write(\"%s\") failed: %s\n", cmd,
-			strerror(errno));
-		return -1;
-	}
-
-	return (size_t)written == len ? 0 : -1;
-}
-
-static int read_view(const char *view_cmd, char *buf, size_t size)
+static int read_log_text(char *buf, size_t size)
 {
 	int fd;
 	ssize_t n;
 
-	fd = open_device();
-	if (fd < 0)
-		return -1;
-
-	if (write_command(fd, view_cmd) < 0) {
-		close(fd);
+	fd = open(KBMON_LOG_DEVICE, O_RDONLY);
+	if (fd < 0) {
+		perror("open " KBMON_LOG_DEVICE);
 		return -1;
 	}
 
 	n = read(fd, buf, size - 1);
 	if (n < 0) {
-		perror("read " KBMON_DEVICE);
+		perror("read " KBMON_LOG_DEVICE);
 		close(fd);
 		return -1;
 	}
@@ -313,222 +113,188 @@ static int read_view(const char *view_cmd, char *buf, size_t size)
 	return 0;
 }
 
-static void parse_kv_text(const char *text, struct kb_stats *stats)
+static void parse_log_text(const char *text, struct kb_log_snapshot *snapshot)
 {
 	const char *line = text;
-	char name[64];
-	unsigned int code;
-	unsigned long long value;
+
+	memset(snapshot, 0, sizeof(*snapshot));
 
 	while (*line) {
-		if (sscanf(line, "%63[^=]=%llu", name, &value) == 2) {
-			if (!strcmp(name, "total_presses"))
-				stats->total_presses = value;
-			else if (!strcmp(name, "active_keyboards"))
-				stats->active_keyboards = value;
-			else if (!strcmp(name, "uptime_ms"))
-				stats->uptime_ms = value;
-			else if (!strcmp(name, "last_press_ms"))
-				stats->last_press_ms = value;
-			else if (!strcmp(name, "presses_per_minute"))
-				stats->presses_per_minute = value;
-			else if (!strcmp(name, "presses_last_10s"))
-				stats->presses_last_10s = value;
-			else if (!strcmp(name, "peak_presses_per_second"))
-				stats->peak_presses_per_second = value;
-			else if (!strcmp(name, "repeat_events"))
-				stats->repeat_events = value;
-			else if (!strcmp(name, "buffered_events"))
-				stats->buffered_events = value;
-			else if (!strcmp(name, "buffer_dropped"))
-				stats->buffer_dropped = value;
-			else if (!strcmp(name, "nonzero_keys"))
-				stats->nonzero_keys = value;
-			else if (!strcmp(name, "letters"))
-				stats->letters = value;
-			else if (!strcmp(name, "digits"))
-				stats->digits = value;
-			else if (!strcmp(name, "modifiers"))
-				stats->modifiers = value;
-			else if (!strcmp(name, "navigation"))
-				stats->navigation = value;
-			else if (!strcmp(name, "function_keys"))
-				stats->function_keys = value;
-			else if (!strcmp(name, "control_keys"))
-				stats->control_keys = value;
-			else if (!strcmp(name, "other_keys"))
-				stats->other_keys = value;
-			else if (sscanf(name, "key_%u", &code) == 1 &&
-				 code < KBMON_KEY_COUNT)
-				stats->key_counts[code] = value;
+		size_t line_len;
+		char current[256];
+		struct kb_log_event event;
+		int header_parsed;
+
+		line_len = strcspn(line, "\n");
+		if (line_len >= sizeof(current))
+			line_len = sizeof(current) - 1;
+		memcpy(current, line, line_len);
+		current[line_len] = '\0';
+
+		header_parsed =
+			sscanf(current, "events=%u", &snapshot->events) == 1 ||
+			sscanf(current, "log_capacity=%u",
+			       &snapshot->log_capacity) == 1 ||
+			sscanf(current, "log_dropped=%llu",
+			       &snapshot->log_dropped) == 1;
+
+		if (!header_parsed &&
+		    sscanf(current, "seq=%llu time_ms=%llu code=%u key=%63s",
+			   &event.seq, &event.time_ms, &event.code,
+			   event.key) == 4) {
+			if (snapshot->entry_count <
+			    sizeof(snapshot->entries) /
+				    sizeof(snapshot->entries[0])) {
+				snapshot->entries[snapshot->entry_count++] =
+					event;
+			}
 		}
 
-		line = strchr(line, '\n');
-		if (!line)
-			break;
-		line++;
+		line += line_len;
+		if (*line == '\n')
+			line++;
 	}
 }
 
-static int collect_stats(struct kb_stats *stats)
+static int collect_log_snapshot(struct kb_log_snapshot *snapshot)
 {
-	char summary[KBMON_READ_BUF];
-	char keys[KBMON_READ_BUF];
+	char text[KBMON_READ_BUF];
 
-	memset(stats, 0, sizeof(*stats));
-
-	if (read_view("view summary", summary, sizeof(summary)) < 0)
+	if (read_log_text(text, sizeof(text)) < 0)
 		return -1;
 
-	if (read_view("view keys", keys, sizeof(keys)) < 0)
-		return -1;
-
-	parse_kv_text(summary, stats);
-	parse_kv_text(keys, stats);
+	parse_log_text(text, snapshot);
 	return 0;
 }
 
-static void insert_top_key(unsigned int code, unsigned long long count,
-			   unsigned int *top_codes,
-			   unsigned long long *top_counts)
+static int append_json_string(char *buf, size_t cap, size_t *len,
+			      const char *value)
 {
-	int i;
-	int j;
+	const unsigned char *p = (const unsigned char *)value;
 
-	if (!count)
-		return;
+	if (appendf(buf, cap, len, "\"") < 0)
+		return -1;
 
-	for (i = 0; i < KBMON_TOP_KEYS; i++) {
-		if (count <= top_counts[i])
-			continue;
-
-		for (j = KBMON_TOP_KEYS - 1; j > i; j--) {
-			top_counts[j] = top_counts[j - 1];
-			top_codes[j] = top_codes[j - 1];
+	while (*p) {
+		switch (*p) {
+		case '"':
+			if (appendf(buf, cap, len, "\\\"") < 0)
+				return -1;
+			break;
+		case '\\':
+			if (appendf(buf, cap, len, "\\\\") < 0)
+				return -1;
+			break;
+		case '\b':
+			if (appendf(buf, cap, len, "\\b") < 0)
+				return -1;
+			break;
+		case '\f':
+			if (appendf(buf, cap, len, "\\f") < 0)
+				return -1;
+			break;
+		case '\n':
+			if (appendf(buf, cap, len, "\\n") < 0)
+				return -1;
+			break;
+		case '\r':
+			if (appendf(buf, cap, len, "\\r") < 0)
+				return -1;
+			break;
+		case '\t':
+			if (appendf(buf, cap, len, "\\t") < 0)
+				return -1;
+			break;
+		default:
+			if (*p < 0x20) {
+				if (appendf(buf, cap, len, "\\u%04x", *p) < 0)
+					return -1;
+			} else if (appendf(buf, cap, len, "%c", *p) < 0) {
+				return -1;
+			}
+			break;
 		}
-
-		top_counts[i] = count;
-		top_codes[i] = code;
-		return;
+		p++;
 	}
+
+	return appendf(buf, cap, len, "\"");
 }
 
-static int build_json(const struct kb_stats *stats, char *json, size_t cap)
+static int snapshot_latest_seq(const struct kb_log_snapshot *snapshot,
+			       unsigned long long *seq)
 {
-	unsigned int top_codes[KBMON_TOP_KEYS] = { 0 };
-	unsigned long long top_counts[KBMON_TOP_KEYS] = { 0 };
+	if (!snapshot->entry_count)
+		return 0;
+
+	*seq = snapshot->entries[snapshot->entry_count - 1].seq;
+	return 1;
+}
+
+static int build_stream_start_json(const struct kb_log_snapshot *snapshot,
+				   char *json, size_t cap)
+{
 	char hostname[128] = "unknown";
 	size_t len = 0;
-	int first;
-	int i;
-	unsigned int code;
+	unsigned long long latest_seq = 0;
+	int have_latest;
 	time_t now = time(NULL);
 
 	(void)gethostname(hostname, sizeof(hostname));
 	hostname[sizeof(hostname) - 1] = '\0';
-
-	for (code = 0; code < KBMON_KEY_COUNT; code++)
-		insert_top_key(code, stats->key_counts[code], top_codes,
-			       top_counts);
+	have_latest = snapshot_latest_seq(snapshot, &latest_seq);
 
 	if (appendf(json, cap, &len,
-		    "{"
-		    "\"schema\":\"kbmonitor.stats.v1\","
-		    "\"source\":\"kbmonitor\","
-		    "\"host\":\"%s\","
+		    "{\"schema\":\"kbmonitor.keylog.stream.v1\","
+		    "\"type\":\"stream_start\","
+		    "\"source\":\"kbmonitor_log\","
+		    "\"device\":") < 0)
+		return -1;
+	if (append_json_string(json, cap, &len, KBMON_LOG_DEVICE) < 0)
+		return -1;
+	if (appendf(json, cap, &len, ",\"host\":") < 0)
+		return -1;
+	if (append_json_string(json, cap, &len, hostname) < 0)
+		return -1;
+	if (appendf(json, cap, &len,
+		    ",\"unix_time\":%lld,"
+		    "\"privacy\":{\"exports_key_names\":true,"
+		    "\"exports_text\":false},"
+		    "\"log\":{\"events\":%u,\"capacity\":%u,"
+		    "\"dropped\":%llu,\"latest_seq\":",
+		    (long long)now, snapshot->events, snapshot->log_capacity,
+		    snapshot->log_dropped) < 0)
+		return -1;
+
+	if (have_latest) {
+		if (appendf(json, cap, &len, "%llu", latest_seq) < 0)
+			return -1;
+	} else if (appendf(json, cap, &len, "null") < 0) {
+		return -1;
+	}
+
+	return appendf(json, cap, &len, "}}\n");
+}
+
+static int build_event_json(const struct kb_log_event *event, char *json,
+			    size_t cap)
+{
+	size_t len = 0;
+	time_t now = time(NULL);
+
+	if (appendf(json, cap, &len,
+		    "{\"schema\":\"kbmonitor.keylog.stream.v1\","
+		    "\"type\":\"key_event\","
+		    "\"source\":\"kbmonitor_log\","
 		    "\"unix_time\":%lld,"
-		    "\"privacy\":{\"exports_text\":false},",
-		    hostname, (long long)now) < 0)
+		    "\"event\":{\"seq\":%llu,\"time_ms\":%llu,"
+		    "\"code\":%u,\"key\":",
+		    (long long)now, event->seq, event->time_ms,
+		    event->code) < 0)
+		return -1;
+	if (append_json_string(json, cap, &len, event->key) < 0)
 		return -1;
 
-	if (appendf(json, cap, &len,
-		    "\"summary\":{"
-		    "\"total_presses\":%llu,"
-		    "\"active_keyboards\":%llu,"
-		    "\"uptime_ms\":%llu,"
-		    "\"last_press_ms\":%llu,"
-		    "\"presses_per_minute\":%llu,"
-		    "\"presses_last_10s\":%llu,"
-		    "\"peak_presses_per_second\":%llu,"
-		    "\"repeat_events\":%llu,"
-		    "\"buffered_events\":%llu,"
-		    "\"buffer_dropped\":%llu"
-		    "},",
-		    stats->total_presses, stats->active_keyboards,
-		    stats->uptime_ms, stats->last_press_ms,
-		    stats->presses_per_minute, stats->presses_last_10s,
-		    stats->peak_presses_per_second,
-		    stats->repeat_events, stats->buffered_events,
-		    stats->buffer_dropped) < 0)
-		return -1;
-
-	if (appendf(json, cap, &len,
-		    "\"analytics\":{"
-		    "\"unique_keys\":%llu,"
-		    "\"categories\":{"
-		    "\"letters\":%llu,"
-		    "\"digits\":%llu,"
-		    "\"modifiers\":%llu,"
-		    "\"navigation\":%llu,"
-		    "\"function_keys\":%llu,"
-		    "\"control_keys\":%llu,"
-		    "\"other_keys\":%llu"
-		    "},",
-		    stats->nonzero_keys, stats->letters, stats->digits,
-		    stats->modifiers, stats->navigation, stats->function_keys,
-		    stats->control_keys, stats->other_keys) < 0)
-		return -1;
-
-	if (appendf(json, cap, &len, "\"top_keys\":[") < 0)
-		return -1;
-
-	first = 1;
-	for (i = 0; i < KBMON_TOP_KEYS && top_counts[i] > 0; i++) {
-		const char *label = key_label(top_codes[i]);
-		char fallback[24];
-
-		if (!label) {
-			snprintf(fallback, sizeof(fallback), "KEY_%u",
-				 top_codes[i]);
-			label = fallback;
-		}
-
-		if (appendf(json, cap, &len,
-			    "%s{\"key\":\"%s\",\"code\":%u,\"count\":%llu}",
-			    first ? "" : ",", label, top_codes[i],
-			    top_counts[i]) < 0)
-			return -1;
-		first = 0;
-	}
-
-	if (appendf(json, cap, &len, "],\"per_key\":{") < 0)
-		return -1;
-
-	first = 1;
-	for (code = 0; code < KBMON_KEY_COUNT; code++) {
-		const char *label;
-		char fallback[24];
-
-		if (!stats->key_counts[code])
-			continue;
-
-		label = key_label(code);
-		if (!label) {
-			snprintf(fallback, sizeof(fallback), "KEY_%u", code);
-			label = fallback;
-		}
-
-		if (appendf(json, cap, &len, "%s\"%s\":%llu",
-			    first ? "" : ",", label,
-			    stats->key_counts[code]) < 0)
-			return -1;
-		first = 0;
-	}
-
-	if (appendf(json, cap, &len, "}}}\n") < 0)
-		return -1;
-
-	return 0;
+	return appendf(json, cap, &len, "}}\n");
 }
 
 static int tcp_connect(const char *host, const char *port)
@@ -581,12 +347,14 @@ static int ssl_write_all(SSL *ssl, const char *buf, size_t len)
 	return 0;
 }
 
-static int send_tls_payload(const struct options *opts, const char *payload)
+static int tls_client_connect(const struct options *opts, struct tls_client *client)
 {
 	SSL_CTX *ctx;
 	SSL *ssl;
 	int fd;
-	int rc = -1;
+
+	memset(client, 0, sizeof(*client));
+	client->fd = -1;
 
 	fd = tcp_connect(opts->host, opts->port);
 	if (fd < 0) {
@@ -627,19 +395,41 @@ static int send_tls_payload(const struct options *opts, const char *payload)
 		goto out_ssl;
 	}
 
-	if (ssl_write_all(ssl, payload, strlen(payload)) == 0)
-		rc = 0;
-	else
-		ERR_print_errors_fp(stderr);
-
-	SSL_shutdown(ssl);
+	client->ctx = ctx;
+	client->ssl = ssl;
+	client->fd = fd;
+	return 0;
 
 out_ssl:
 	SSL_free(ssl);
 out_ctx:
 	SSL_CTX_free(ctx);
 	close(fd);
-	return rc;
+	return -1;
+}
+
+static void tls_client_close(struct tls_client *client)
+{
+	if (client->ssl) {
+		SSL_shutdown(client->ssl);
+		SSL_free(client->ssl);
+	}
+	if (client->ctx)
+		SSL_CTX_free(client->ctx);
+	if (client->fd >= 0)
+		close(client->fd);
+
+	memset(client, 0, sizeof(*client));
+	client->fd = -1;
+}
+
+static int send_tls_payload(struct tls_client *client, const char *payload)
+{
+	if (ssl_write_all(client->ssl, payload, strlen(payload)) == 0)
+		return 0;
+
+	ERR_print_errors_fp(stderr);
+	return -1;
 }
 
 static int parse_int_arg(const char *value, int fallback)
@@ -661,8 +451,8 @@ static int parse_args(int argc, char **argv, struct options *opts)
 	int i;
 
 	memset(opts, 0, sizeof(*opts));
-	opts->interval_sec = 5;
-	opts->count = 1;
+	opts->interval_sec = 1;
+	opts->count = 0;
 
 	if (argc < 3)
 		return -1;
@@ -673,7 +463,7 @@ static int parse_args(int argc, char **argv, struct options *opts)
 
 	for (i = 3; i < argc; i++) {
 		if (!strcmp(argv[i], "--interval") && i + 1 < argc)
-			opts->interval_sec = parse_int_arg(argv[++i], 5);
+			opts->interval_sec = parse_int_arg(argv[++i], 1);
 		else if (!strcmp(argv[i], "--count") && i + 1 < argc)
 			opts->count = parse_int_arg(argv[++i], 1);
 		else if (!strcmp(argv[i], "--ca-file") && i + 1 < argc)
@@ -686,12 +476,19 @@ static int parse_args(int argc, char **argv, struct options *opts)
 			return -1;
 	}
 
+	if (opts->interval_sec < 1)
+		opts->interval_sec = 1;
+
 	return 0;
 }
 
 int main(int argc, char **argv)
 {
 	struct options opts;
+	struct tls_client client;
+	struct kb_log_snapshot snapshot;
+	unsigned long long last_seq = 0;
+	int have_last_seq;
 	int sent = 0;
 
 	if (parse_args(argc, argv, &opts) < 0) {
@@ -702,28 +499,77 @@ int main(int argc, char **argv)
 	SSL_library_init();
 	SSL_load_error_strings();
 
-	while (opts.count == 0 || sent < opts.count) {
-		struct kb_stats stats;
+	if (collect_log_snapshot(&snapshot) < 0)
+		return 1;
+	have_last_seq = snapshot_latest_seq(&snapshot, &last_seq);
+
+	if (tls_client_connect(&opts, &client) < 0)
+		return 1;
+
+	{
 		char json[JSON_BUF_SIZE];
 
-		if (collect_stats(&stats) < 0)
-			return 1;
-
-		if (build_json(&stats, json, sizeof(json)) < 0) {
-			fprintf(stderr, "failed to build JSON payload\n");
+		if (build_stream_start_json(&snapshot, json, sizeof(json)) < 0) {
+			fprintf(stderr, "failed to build stream start JSON\n");
+			tls_client_close(&client);
 			return 1;
 		}
 
-		if (send_tls_payload(&opts, json) < 0)
+		if (send_tls_payload(&client, json) < 0) {
+			tls_client_close(&client);
 			return 1;
-
-		printf("sent TLS stats sample %d to %s:%s\n", sent + 1,
-		       opts.host, opts.port);
-		sent++;
-
-		if (opts.count == 0 || sent < opts.count)
-			sleep((unsigned int)opts.interval_sec);
+		}
 	}
 
+	printf("streaming TLS key log events to %s:%s\n", opts.host, opts.port);
+	fflush(stdout);
+
+	while (opts.count == 0 || sent < opts.count) {
+		unsigned long long latest_seq;
+		int have_latest;
+		unsigned int i;
+
+		sleep((unsigned int)opts.interval_sec);
+
+		if (collect_log_snapshot(&snapshot) < 0) {
+			tls_client_close(&client);
+			return 1;
+		}
+
+		have_latest = snapshot_latest_seq(&snapshot, &latest_seq);
+		if (have_last_seq && have_latest && latest_seq < last_seq)
+			have_last_seq = 0;
+
+		for (i = 0; i < snapshot.entry_count; i++) {
+			const struct kb_log_event *event = &snapshot.entries[i];
+			char json[JSON_BUF_SIZE];
+
+			if (have_last_seq && event->seq <= last_seq)
+				continue;
+
+			if (build_event_json(event, json, sizeof(json)) < 0) {
+				fprintf(stderr, "failed to build key event JSON\n");
+				tls_client_close(&client);
+				return 1;
+			}
+
+			if (send_tls_payload(&client, json) < 0) {
+				tls_client_close(&client);
+				return 1;
+			}
+
+			last_seq = event->seq;
+			have_last_seq = 1;
+			sent++;
+			printf("sent key event seq=%llu key=%s to %s:%s\n",
+			       event->seq, event->key, opts.host, opts.port);
+			fflush(stdout);
+
+			if (opts.count != 0 && sent >= opts.count)
+				break;
+		}
+	}
+
+	tls_client_close(&client);
 	return 0;
 }

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Minimal TLS receiver for kbmonitor JSON statistics."""
+"""Minimal live TLS receiver for kbmonitor keylog JSON lines."""
 
 import argparse
 import socket
@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Receive kbmonitor TLS JSON")
+    parser = argparse.ArgumentParser(description="Receive kbmonitor TLS JSON lines")
     parser.add_argument("--host", default="0.0.0.0", help="listen address")
     parser.add_argument("--port", type=int, default=8443, help="listen port")
     parser.add_argument("--cert", required=True, help="TLS certificate file")
@@ -32,22 +32,25 @@ def main():
             with client:
                 try:
                     with context.wrap_socket(client, server_side=True) as tls:
-                        chunks = []
+                        print(f"\n[tls-receiver] stream from {addr[0]}:{addr[1]}", flush=True)
+                        pending = ""
                         while True:
                             data = tls.recv(4096)
                             if not data:
                                 break
-                            chunks.append(data)
-                        payload = b"".join(chunks).decode("utf-8", errors="replace")
+                            pending += data.decode("utf-8", errors="replace")
+                            while "\n" in pending:
+                                line, pending = pending.split("\n", 1)
+                                if line:
+                                    stamp = datetime.now(timezone.utc).isoformat()
+                                    print(f"[tls-receiver] {stamp} {line}", flush=True)
+                        if pending:
+                            stamp = datetime.now(timezone.utc).isoformat()
+                            print(f"[tls-receiver] {stamp} {pending}", flush=True)
                 except ssl.SSLError as exc:
                     print(f"[tls-receiver] TLS error from {addr}: {exc}")
                     continue
 
-            stamp = datetime.now(timezone.utc).isoformat()
-            print(f"\n[tls-receiver] {stamp} from {addr[0]}:{addr[1]}")
-            print(payload.rstrip())
-
 
 if __name__ == "__main__":
     main()
-

@@ -51,7 +51,7 @@ video as required by the assignment.
    - Show clean unload.
 
 8. Strengths, limitations, and next steps
-   - Strengths: real kernel module, real USB keyboard activity, clear `/dev` interface, Level 2 per-key heatmap, local-only text demo, TLS stats export.
+   - Strengths: real kernel module, real USB keyboard activity, clear `/dev` interface, Level 2 per-key heatmap, local-only text demo, TLS key-name log export.
    - Limitations: text demo is intentionally limited; TLS demo uses self-signed certificate unless configured otherwise.
    - Next steps: optional dashboard or further polish.
 
@@ -77,7 +77,7 @@ Capture these moments:
 - Updated stats show increased `total_presses`.
 - Key analytics and heatmap are shown.
 - Optional text demo is shown only if built with `TEXT_MODE=1`.
-- TLS receiver shows encrypted JSON stats.
+- TLS receiver shows encrypted JSON key events.
 - Reset clears the counters.
 - `dmesg` shows module and event logs.
 - Module unloads cleanly.

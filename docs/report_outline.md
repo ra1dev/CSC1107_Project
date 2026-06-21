@@ -95,7 +95,7 @@ Strengths:
 - Uses a clear `/dev` interface.
 - Includes Level 2 per-key analytics and terminal heatmap with per-key counts.
 - Includes compile-time gated, local-only Level 3 text demo.
-- Includes user-space TLS export for Level 1/2 statistics.
+- Includes user-space TLS streaming for key-name log events.
 - Avoids reconstructing typed text.
 
 Limitations:

@@ -22,18 +22,18 @@ Implemented direction:
 - Kept `./user/kbmon raw-keys` for machine-readable driver output.
 - Keep key-code analytics as statistics, not typed text.
 
-## Completed: TLS Statistics Export
+## Completed: TLS Key-Name Log Stream
 
 Goal:
 
-- Send Level 1 and Level 2 keyboard statistics to a remote server using TLS.
+- Stream live key-name log entries to a remote server using TLS.
 
 Implemented direction:
 
 - Kept TLS in user space using C and OpenSSL.
 - Added `user/kbmon_tls.c`.
-- Reads `view summary` and `view keys` only.
-- Serializes summary/key analytics as JSON.
+- Reads `/dev/kbmonitor_log`.
+- Serializes new key-name log entries as newline-delimited JSON.
 - Added `server/tls_receiver.py` for demo evidence.
 - Added certificate and client helper scripts.
 - Never transmit reconstructed typed text.
