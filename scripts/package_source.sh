@@ -12,6 +12,7 @@ zip -r "$OUT" \
   kernel user scripts docs server \
   -x "*/.git/*" \
   -x "teammate_version/*" \
+  -x "validation_logs/*" \
   -x "*/__pycache__/*" \
   -x "*.ko" \
   -x "*.o" \

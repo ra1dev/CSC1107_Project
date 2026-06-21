@@ -15,6 +15,7 @@ bash "$ROOT/scripts/load.sh"
 echo
 echo "[demo] Initial stats"
 "$ROOT/user/kbmon" summary
+"$ROOT/user/kbmon" status
 
 echo
 echo "[demo] Press several keys on the USB keyboard, then press Enter here."
@@ -31,6 +32,14 @@ echo "[demo] Level 2 key-frequency analytics"
 echo
 echo "[demo] Heatmap with per-key counts"
 "$ROOT/user/kbmon" heatmap
+
+echo
+echo "[demo] Recent event history"
+"$ROOT/user/kbmon" events
+
+echo
+echo "[demo] Report evidence JSON export"
+"$ROOT/user/kbmon" export
 
 echo
 echo "[demo] Demonstrating write() system call - sending view keys command"

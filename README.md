@@ -33,6 +33,7 @@ Level 1 records general keyboard activity:
 - active keyboard devices
 - module uptime
 - timestamp of the last keypress
+- average and recent keypress rates
 - repeat events
 - recent-event ring buffer size and dropped entries
 
@@ -51,6 +52,9 @@ total_presses=42
 active_keyboards=1
 uptime_ms=15320
 last_press_ms=15110
+presses_per_minute=164
+presses_last_10s=8
+peak_presses_per_second=3
 repeat_events=3
 buffered_events=42
 buffer_dropped=0
@@ -90,8 +94,9 @@ Top keys:
  2. A        count=6
 
 Pressed keys:
-  A        6
-  SPACE    8
+  KEY        CODE   COUNT
+  A          30     6
+  SPACE      57     8
 ```
 
 Run a terminal heatmap with per-key counts:
@@ -100,11 +105,44 @@ Run a terminal heatmap with per-key counts:
 ./user/kbmon heatmap
 ```
 
+Show recent buffered keypress events:
+
+```bash
+./user/kbmon events
+```
+
+Example:
+
+```text
+Recent keypress events (3/64 buffered, dropped=0)
+NO    KEY        CODE   SINCE_START  AGE
+1     A          30     14022ms      3050ms ago
+2     SPACE      57     14610ms      2462ms ago
+3     ENTER      28     17042ms      30ms ago
+```
+
 For raw machine-readable driver output:
 
 ```bash
 ./user/kbmon raw-keys
 ```
+
+### Status And Report Export
+
+Show driver/device status:
+
+```bash
+./user/kbmon status
+```
+
+Export report-friendly JSON evidence:
+
+```bash
+./user/kbmon export
+```
+
+The JSON export includes Level 1 summary, Level 2 categories, per-key counts,
+recent event metadata, and the privacy marker `"exports_text": false`.
 
 ### Level 3: Local Text Demo
 
@@ -187,6 +225,12 @@ Install dependencies on Raspberry Pi OS:
 ```bash
 sudo apt update
 sudo apt install -y raspberrypi-kernel-headers build-essential libssl-dev python3 openssl zip
+```
+
+Or use the setup helper:
+
+```bash
+bash scripts/setup_pi.sh
 ```
 
 Check kernel headers:
@@ -272,6 +316,9 @@ From the project root after loading the module:
 ./user/kbmon summary
 ./user/kbmon keys
 ./user/kbmon heatmap
+./user/kbmon events
+./user/kbmon status
+./user/kbmon export
 ./user/kbmon reset
 ./user/kbmon watch 1 10
 ```
@@ -283,6 +330,12 @@ echo "view summary" > /dev/kbmonitor
 cat /dev/kbmonitor
 
 echo "view keys" > /dev/kbmonitor
+cat /dev/kbmonitor
+
+echo "view events" > /dev/kbmonitor
+cat /dev/kbmonitor
+
+echo "view status" > /dev/kbmonitor
 cat /dev/kbmonitor
 
 echo "reset" > /dev/kbmonitor
@@ -307,10 +360,12 @@ Expected flow:
 6. Show updated Level 1 stats.
 7. Show Level 2 key analytics.
 8. Show heatmap with per-key counts.
-9. Demonstrate direct `write()` to `/dev/kbmonitor`.
-10. Reset counters.
-11. Show recent `dmesg`.
-12. Unload cleanly.
+9. Show recent event history.
+10. Show report evidence JSON export.
+11. Demonstrate direct `write()` to `/dev/kbmonitor`.
+12. Reset counters.
+13. Show recent `dmesg`.
+14. Unload cleanly.
 
 Optional Level 3 demo:
 
@@ -404,6 +459,19 @@ Send repeated samples:
 ./user/kbmon_tls <SERVER_IP> 8443 --interval 5 --count 10 --insecure
 ```
 
+Verified self-signed demo mode:
+
+```bash
+bash scripts/generate_tls_cert.sh
+./user/kbmon_tls <SERVER_IP> 8443 --ca-file server/server.crt --server-name kbmonitor-demo
+```
+
+The helper also supports verified mode:
+
+```bash
+bash scripts/tls_client_demo.sh <SERVER_IP> 8443 --verify
+```
+
 Expected sender output:
 
 ```text
@@ -439,9 +507,10 @@ Expected receiver output is JSON similar to:
 }
 ```
 
-`--insecure` is intended for the self-signed lab demo. It still uses an
-encrypted TLS connection, but disables peer certificate verification. For stricter
-verification, use `--ca-file`.
+`--insecure` is intended only for quick self-signed lab demos. It still uses an
+encrypted TLS connection, but disables peer certificate verification. For the
+stronger demo path, use `--ca-file server/server.crt --server-name
+kbmonitor-demo`.
 
 Important privacy rule: `kbmon_tls` exports only Level 1 summary and Level 2 key
 analytics. It does not read `view text`, does not send the Level 3 text buffer,
@@ -476,6 +545,8 @@ scripts/
   unload.sh           Remove module
   demo.sh             Main coursework demo flow
   text_demo.sh        Optional Level 3 demo
+  setup_pi.sh         Raspberry Pi dependency/setup helper
+  validate_all.sh     End-to-end validation/evidence helper
   generate_tls_cert.sh
   tls_client_demo.sh
   package_source.sh

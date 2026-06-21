@@ -14,5 +14,6 @@ user/kbmon_tls
 server/*.crt
 server/*.key
 *.zip
+validation_logs/
 teammate_version/
 __pycache__/

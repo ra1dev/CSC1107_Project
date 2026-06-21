@@ -7,6 +7,8 @@
 | Build all | `make` | `kernel/kbmonitor.ko` and `user/kbmon` are created |
 | Clean build outputs | `make clean` | Kernel and user build artifacts are removed |
 | Rebuild after clean | `make clean && make` | Build still succeeds |
+| Setup helper | `bash scripts/setup_pi.sh` | Required packages are installed and kernel headers are found |
+| Validation helper | `bash scripts/validate_all.sh` | Normal build, module lifecycle, user commands, text build, and TLS cert helper are checked |
 
 ## Module Lifecycle Tests
 
@@ -25,6 +27,9 @@
 | Read summary | `./user/kbmon summary` | Valid key-value stats are printed |
 | Manual read | `cat /dev/kbmonitor` | Summary stats are printed |
 | Select view | `echo "view summary" > /dev/kbmonitor` | Command succeeds |
+| Status view | `./user/kbmon status` | Driver/device status is printed |
+| Event view | `./user/kbmon events` | Recent keypress history is printed |
+| Report export | `./user/kbmon export` | JSON evidence is printed and contains `"exports_text": false` |
 | Reset | `./user/kbmon reset` | Counters return to zero |
 | Invalid command | `echo bad > /dev/kbmonitor` | Command fails and `dmesg` logs warning |
 
@@ -38,6 +43,8 @@
 | Track repeats | Hold one key | `repeat_events` may increase; `total_presses` should not increase for every repeat |
 | Active keyboard | Load with USB keyboard connected | `active_keyboards=1` or greater |
 | Ring buffer | Press more than 64 keys | `buffered_events=64`, `buffer_dropped` increases |
+| Rate stats | Press keys quickly, run summary | `presses_last_10s`, `presses_per_minute`, and `peak_presses_per_second` are present |
+| Event history labels | Press known keys, run `./user/kbmon events` | Recent events show key labels and Linux key codes |
 
 ## Level 2 Analytics Tests
 
@@ -48,6 +55,7 @@
 | Category count | Press letters and digits, run `./user/kbmon keys` | `letters` and `digits` increase correctly |
 | Top keys | Press one key repeatedly, run `./user/kbmon keys` | Top key code matches the repeated key |
 | Friendly key view | `./user/kbmon keys` | Output uses key labels, not raw Linux key-code fields |
+| Per-key table | `./user/kbmon keys` | Pressed keys show `KEY`, `CODE`, and `COUNT` columns |
 | Heatmap | `./user/kbmon heatmap` | Keyboard layout displays `[KEY:count]` values |
 
 ## Level 3 Local Text Demo Tests
@@ -106,8 +114,10 @@ Send from Raspberry Pi:
 | TLS client builds | `make` | `user/kbmon_tls` is created |
 | Receiver starts | Run `server/tls_receiver.py` | Server listens on port 8443 |
 | Encrypted send | Run `./user/kbmon_tls <SERVER_IP> 8443 --insecure` | Receiver prints JSON payload |
+| Verified send | Run `./user/kbmon_tls <SERVER_IP> 8443 --ca-file server/server.crt --server-name kbmonitor-demo` | Receiver prints JSON and client verifies the demo certificate |
 | Level 1 included | Inspect JSON | `summary.total_presses` and related fields exist |
 | Level 2 included | Inspect JSON | `analytics.categories`, `top_keys`, and `per_key` exist |
+| Rate stats included | Inspect JSON | `presses_per_minute`, `presses_last_10s`, and `peak_presses_per_second` exist |
 | Text excluded | Inspect JSON | No `text`, `text_begin`, or reconstructed content appears |
 | Repeat send | Run with `--interval 5 --count 3` | Receiver gets three samples |
 
@@ -134,6 +144,8 @@ The video should capture:
 - `/dev/kbmonitor` creation
 - stats before and after typing
 - key analytics and heatmap
+- recent event history
+- JSON report evidence export
 - optional local text demo, if built with `TEXT_MODE=1`
 - TLS JSON receive output
 - reset behavior

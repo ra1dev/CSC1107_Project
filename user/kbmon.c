@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 #define KBMON_DEVICE "/dev/kbmonitor"
@@ -118,7 +119,14 @@ struct heat_key {
 struct key_stats {
 	unsigned long long total_presses;
 	unsigned long long active_keyboards;
+	unsigned long long uptime_ms;
+	unsigned long long last_press_ms;
+	unsigned long long presses_per_minute;
+	unsigned long long presses_last_10s;
+	unsigned long long peak_presses_per_second;
 	unsigned long long repeat_events;
+	unsigned long long buffered_events;
+	unsigned long long buffer_dropped;
 	unsigned long long nonzero_keys;
 	unsigned long long letters;
 	unsigned long long digits;
@@ -128,6 +136,21 @@ struct key_stats {
 	unsigned long long control_keys;
 	unsigned long long other_keys;
 	unsigned long long counts[KBMON_KEY_COUNT];
+};
+
+struct event_entry {
+	unsigned int index;
+	unsigned int code;
+	unsigned long long ms;
+	unsigned long long age_ms;
+	char key[32];
+};
+
+struct event_stats {
+	unsigned int event_count;
+	unsigned int event_capacity;
+	unsigned long long buffer_dropped;
+	struct event_entry events[64];
 };
 
 static const struct heat_key row_functions[] = {
@@ -178,6 +201,9 @@ static void usage(const char *prog)
 		"  %s keys                 Show human-friendly key analytics\n"
 		"  %s heatmap              Render keyboard layout with per-key counts\n"
 		"  %s counts               Alias for heatmap\n"
+		"  %s events               Show recent keypress event history\n"
+		"  %s status               Show driver/device status\n"
+		"  %s export               Print report-friendly JSON evidence\n"
 		"  %s raw-keys             Print raw driver key analytics\n"
 		"  %s text                 Enable and view local text demo buffer\n"
 		"  %s clear-text           Clear local text demo buffer\n"
@@ -186,7 +212,8 @@ static void usage(const char *prog)
 		"  %s watch [sec] [count]  Read stats repeatedly\n"
 		"\n"
 		"Default command: summary\n",
-		prog, prog, prog, prog, prog, prog, prog, prog, prog, prog);
+		prog, prog, prog, prog, prog, prog, prog, prog, prog, prog,
+		prog, prog, prog);
 }
 
 static void explain_open_error(void)
@@ -276,6 +303,25 @@ static int show_view(const char *view_command)
 	if (write_command(fd, view_command) < 0)
 		rc = 1;
 	else if (read_stats(fd) < 0)
+		rc = 1;
+
+	close(fd);
+	return rc;
+}
+
+static int read_view_into_buffer(const char *view_command, char *buf,
+				 size_t size)
+{
+	int fd;
+	int rc = 0;
+
+	fd = open_device();
+	if (fd < 0)
+		return 1;
+
+	if (write_command(fd, view_command) < 0)
+		rc = 1;
+	else if (read_into_buffer(fd, buf, size) < 0)
 		rc = 1;
 
 	close(fd);
@@ -470,16 +516,28 @@ static int parse_key_stats(const char *text, struct key_stats *stats)
 	unsigned long long value;
 	int parsed_keys = 0;
 
-	memset(stats, 0, sizeof(*stats));
-
 	while (*line) {
 		if (sscanf(line, "%63[^=]=%llu", name, &value) == 2) {
 			if (!strcmp(name, "total_presses"))
 				stats->total_presses = value;
 			else if (!strcmp(name, "active_keyboards"))
 				stats->active_keyboards = value;
+			else if (!strcmp(name, "uptime_ms"))
+				stats->uptime_ms = value;
+			else if (!strcmp(name, "last_press_ms"))
+				stats->last_press_ms = value;
+			else if (!strcmp(name, "presses_per_minute"))
+				stats->presses_per_minute = value;
+			else if (!strcmp(name, "presses_last_10s"))
+				stats->presses_last_10s = value;
+			else if (!strcmp(name, "peak_presses_per_second"))
+				stats->peak_presses_per_second = value;
 			else if (!strcmp(name, "repeat_events"))
 				stats->repeat_events = value;
+			else if (!strcmp(name, "buffered_events"))
+				stats->buffered_events = value;
+			else if (!strcmp(name, "buffer_dropped"))
+				stats->buffer_dropped = value;
 			else if (!strcmp(name, "nonzero_keys"))
 				stats->nonzero_keys = value;
 			else if (!strcmp(name, "letters"))
@@ -510,6 +568,62 @@ static int parse_key_stats(const char *text, struct key_stats *stats)
 	}
 
 	return parsed_keys;
+}
+
+static void parse_event_line(struct event_stats *events, unsigned int index,
+			     const char *field, const char *value_text)
+{
+	struct event_entry *event;
+
+	if (index == 0 || index > sizeof(events->events) / sizeof(events->events[0]))
+		return;
+
+	event = &events->events[index - 1];
+	event->index = index;
+
+	if (!strcmp(field, "ms"))
+		event->ms = strtoull(value_text, NULL, 10);
+	else if (!strcmp(field, "age_ms"))
+		event->age_ms = strtoull(value_text, NULL, 10);
+	else if (!strcmp(field, "code"))
+		event->code = (unsigned int)strtoul(value_text, NULL, 10);
+	else if (!strcmp(field, "key")) {
+		snprintf(event->key, sizeof(event->key), "%s", value_text);
+	}
+}
+
+static int parse_event_stats(const char *text, struct event_stats *events)
+{
+	const char *line = text;
+	char name[64];
+	char value_text[64];
+	unsigned long long value;
+	unsigned int index;
+	char field[32];
+
+	memset(events, 0, sizeof(*events));
+
+	while (*line) {
+		if (sscanf(line, "%63[^=]=%63s", name, value_text) == 2) {
+			value = strtoull(value_text, NULL, 10);
+
+			if (!strcmp(name, "event_count"))
+				events->event_count = (unsigned int)value;
+			else if (!strcmp(name, "event_capacity"))
+				events->event_capacity = (unsigned int)value;
+			else if (!strcmp(name, "buffer_dropped"))
+				events->buffer_dropped = value;
+			else if (sscanf(name, "event_%u_%31s", &index, field) == 2)
+				parse_event_line(events, index, field, value_text);
+		}
+
+		line = strchr(line, '\n');
+		if (!line)
+			break;
+		line++;
+	}
+
+	return (int)events->event_count;
 }
 
 static void print_count_row(const struct heat_key *row, size_t count,
@@ -556,40 +670,52 @@ static void print_top_keys(const unsigned long long counts[KBMON_KEY_COUNT])
 
 	puts("\nTop keys:");
 	for (i = 0; i < KBMON_TOP_KEYS && top_counts[i] > 0; i++) {
-		printf("%2d. %-8s count=%llu\n", i + 1,
-		       lookup_key_label(top_codes[i]), top_counts[i]);
+		printf("%2d. %-10s code=%-3u count=%llu\n", i + 1,
+		       lookup_key_label(top_codes[i]), top_codes[i],
+		       top_counts[i]);
 	}
+}
+
+static int collect_key_stats(struct key_stats *stats)
+{
+	char summary_buf[KBMON_READ_BUF];
+	char key_buf[KBMON_READ_BUF];
+
+	memset(stats, 0, sizeof(*stats));
+
+	if (read_view_into_buffer("view summary", summary_buf,
+				  sizeof(summary_buf)) != 0)
+		return 1;
+
+	if (read_view_into_buffer("view keys", key_buf, sizeof(key_buf)) != 0)
+		return 1;
+
+	parse_key_stats(summary_buf, stats);
+	parse_key_stats(key_buf, stats);
+	return 0;
 }
 
 static int show_keys(void)
 {
 	struct key_stats stats;
-	char buf[KBMON_READ_BUF];
 	unsigned int code;
-	int fd;
 
-	fd = open_device();
-	if (fd < 0)
+	if (collect_key_stats(&stats) != 0)
 		return 1;
-
-	if (write_command(fd, "view keys") < 0) {
-		close(fd);
-		return 1;
-	}
-
-	if (read_into_buffer(fd, buf, sizeof(buf)) < 0) {
-		close(fd);
-		return 1;
-	}
-
-	close(fd);
-	parse_key_stats(buf, &stats);
 
 	puts("Keyboard analytics");
 	printf("Total key presses: %llu\n", stats.total_presses);
 	printf("Active keyboard devices: %llu\n", stats.active_keyboards);
 	printf("Repeat events: %llu\n", stats.repeat_events);
 	printf("Unique keys pressed: %llu\n", stats.nonzero_keys);
+	printf("Uptime: %llums\n", stats.uptime_ms);
+	printf("Last press: %llums after module reset/load\n",
+	       stats.last_press_ms);
+	printf("Average rate: %llu presses/min\n", stats.presses_per_minute);
+	printf("Recent rate: %llu presses in the last 10 seconds\n",
+	       stats.presses_last_10s);
+	printf("Peak observed rate: %llu presses/sec\n",
+	       stats.peak_presses_per_second);
 
 	puts("\nCategories:");
 	printf("  Letters:       %llu\n", stats.letters);
@@ -603,10 +729,11 @@ static int show_keys(void)
 	print_top_keys(stats.counts);
 
 	puts("\nPressed keys:");
+	printf("  %-10s %-6s %s\n", "KEY", "CODE", "COUNT");
 	for (code = 0; code < KBMON_KEY_COUNT; code++) {
 		if (stats.counts[code])
-			printf("  %-8s %llu\n", lookup_key_label(code),
-			       stats.counts[code]);
+			printf("  %-10s %-6u %llu\n", lookup_key_label(code),
+			       code, stats.counts[code]);
 	}
 
 	return 0;
@@ -673,6 +800,141 @@ static int show_heatmap(void)
 	return rc;
 }
 
+static int show_status(void)
+{
+	return show_view("view status");
+}
+
+static int show_events(void)
+{
+	char buf[KBMON_READ_BUF];
+	struct event_stats events;
+	unsigned int i;
+
+	if (read_view_into_buffer("view events", buf, sizeof(buf)) != 0)
+		return 1;
+
+	parse_event_stats(buf, &events);
+
+	printf("Recent keypress events (%u/%u buffered, dropped=%llu)\n",
+	       events.event_count, events.event_capacity,
+	       events.buffer_dropped);
+
+	if (events.event_count == 0) {
+		puts("No keypress events buffered yet.");
+		return 0;
+	}
+
+	printf("%-5s %-10s %-6s %-12s %s\n", "NO", "KEY", "CODE",
+	       "SINCE_START", "AGE");
+	for (i = 0; i < events.event_count &&
+	     i < sizeof(events.events) / sizeof(events.events[0]); i++) {
+		const struct event_entry *event = &events.events[i];
+		const char *key = event->key[0] ? event->key :
+			lookup_key_label(event->code);
+
+		printf("%-5u %-10s %-6u %-12llums %llums ago\n",
+		       event->index, key, event->code, event->ms,
+		       event->age_ms);
+	}
+
+	return 0;
+}
+
+static void print_json_escaped(const char *text)
+{
+	putchar('"');
+	while (*text) {
+		if (*text == '"' || *text == '\\')
+			putchar('\\');
+		putchar(*text++);
+	}
+	putchar('"');
+}
+
+static int export_json(void)
+{
+	struct key_stats stats;
+	struct event_stats events;
+	char event_buf[KBMON_READ_BUF];
+	unsigned int code;
+	unsigned int i;
+	int first = 1;
+	time_t now = time(NULL);
+
+	if (collect_key_stats(&stats) != 0)
+		return 1;
+
+	if (read_view_into_buffer("view events", event_buf,
+				  sizeof(event_buf)) != 0)
+		return 1;
+
+	parse_event_stats(event_buf, &events);
+
+	printf("{\n");
+	printf("  \"schema\": \"kbmonitor.report.v1\",\n");
+	printf("  \"source\": \"kbmonitor\",\n");
+	printf("  \"unix_time\": %lld,\n", (long long)now);
+	printf("  \"privacy\": { \"exports_text\": false },\n");
+	printf("  \"summary\": {\n");
+	printf("    \"total_presses\": %llu,\n", stats.total_presses);
+	printf("    \"active_keyboards\": %llu,\n", stats.active_keyboards);
+	printf("    \"uptime_ms\": %llu,\n", stats.uptime_ms);
+	printf("    \"last_press_ms\": %llu,\n", stats.last_press_ms);
+	printf("    \"presses_per_minute\": %llu,\n",
+	       stats.presses_per_minute);
+	printf("    \"presses_last_10s\": %llu,\n", stats.presses_last_10s);
+	printf("    \"peak_presses_per_second\": %llu,\n",
+	       stats.peak_presses_per_second);
+	printf("    \"repeat_events\": %llu,\n", stats.repeat_events);
+	printf("    \"buffered_events\": %llu,\n", stats.buffered_events);
+	printf("    \"buffer_dropped\": %llu\n", stats.buffer_dropped);
+	printf("  },\n");
+	printf("  \"analytics\": {\n");
+	printf("    \"unique_keys\": %llu,\n", stats.nonzero_keys);
+	printf("    \"categories\": {\n");
+	printf("      \"letters\": %llu,\n", stats.letters);
+	printf("      \"digits\": %llu,\n", stats.digits);
+	printf("      \"modifiers\": %llu,\n", stats.modifiers);
+	printf("      \"navigation\": %llu,\n", stats.navigation);
+	printf("      \"function_keys\": %llu,\n", stats.function_keys);
+	printf("      \"control_keys\": %llu,\n", stats.control_keys);
+	printf("      \"other_keys\": %llu\n", stats.other_keys);
+	printf("    },\n");
+	printf("    \"per_key\": [\n");
+
+	for (code = 0; code < KBMON_KEY_COUNT; code++) {
+		if (!stats.counts[code])
+			continue;
+
+		printf("%s      { \"key\": ", first ? "" : ",\n");
+		print_json_escaped(lookup_key_label(code));
+		printf(", \"code\": %u, \"count\": %llu }", code,
+		       stats.counts[code]);
+		first = 0;
+	}
+
+	printf("\n    ]\n");
+	printf("  },\n");
+	printf("  \"recent_events\": [\n");
+	for (i = 0; i < events.event_count &&
+	     i < sizeof(events.events) / sizeof(events.events[0]); i++) {
+		const struct event_entry *event = &events.events[i];
+		const char *key = event->key[0] ? event->key :
+			lookup_key_label(event->code);
+
+		printf("%s    { \"index\": %u, \"key\": ",
+		       i == 0 ? "" : ",\n", event->index);
+		print_json_escaped(key);
+		printf(", \"code\": %u, \"ms\": %llu, \"age_ms\": %llu }",
+		       event->code, event->ms, event->age_ms);
+	}
+	printf("\n  ]\n");
+	printf("}\n");
+
+	return 0;
+}
+
 static int watch_summary(int interval_sec, int count)
 {
 	int i = 0;
@@ -702,6 +964,15 @@ int main(int argc, char **argv)
 
 	if (!strcmp(cmd, "heatmap") || !strcmp(cmd, "counts"))
 		return show_heatmap();
+
+	if (!strcmp(cmd, "events"))
+		return show_events();
+
+	if (!strcmp(cmd, "status"))
+		return show_status();
+
+	if (!strcmp(cmd, "export"))
+		return export_json();
 
 	if (!strcmp(cmd, "raw-keys"))
 		return show_raw_keys();

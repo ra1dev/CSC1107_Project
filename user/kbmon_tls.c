@@ -43,6 +43,9 @@ struct kb_stats {
 	unsigned long long active_keyboards;
 	unsigned long long uptime_ms;
 	unsigned long long last_press_ms;
+	unsigned long long presses_per_minute;
+	unsigned long long presses_last_10s;
+	unsigned long long peak_presses_per_second;
 	unsigned long long repeat_events;
 	unsigned long long buffered_events;
 	unsigned long long buffer_dropped;
@@ -94,6 +97,10 @@ static const char *key_label(unsigned int code)
 		return "9";
 	case 11:
 		return "0";
+	case 12:
+		return "MINUS";
+	case 13:
+		return "EQUAL";
 	case 14:
 		return "BACKSPACE";
 	case 15:
@@ -118,6 +125,10 @@ static const char *key_label(unsigned int code)
 		return "O";
 	case 25:
 		return "P";
+	case 26:
+		return "LEFTBRACE";
+	case 27:
+		return "RIGHTBRACE";
 	case 28:
 		return "ENTER";
 	case 29:
@@ -140,8 +151,16 @@ static const char *key_label(unsigned int code)
 		return "K";
 	case 38:
 		return "L";
+	case 39:
+		return "SEMICOLON";
+	case 40:
+		return "APOSTROPHE";
+	case 41:
+		return "GRAVE";
 	case 42:
 		return "LEFTSHIFT";
+	case 43:
+		return "BACKSLASH";
 	case 44:
 		return "Z";
 	case 45:
@@ -156,6 +175,12 @@ static const char *key_label(unsigned int code)
 		return "N";
 	case 50:
 		return "M";
+	case 51:
+		return "COMMA";
+	case 52:
+		return "DOT";
+	case 53:
+		return "SLASH";
 	case 54:
 		return "RIGHTSHIFT";
 	case 56:
@@ -305,6 +330,12 @@ static void parse_kv_text(const char *text, struct kb_stats *stats)
 				stats->uptime_ms = value;
 			else if (!strcmp(name, "last_press_ms"))
 				stats->last_press_ms = value;
+			else if (!strcmp(name, "presses_per_minute"))
+				stats->presses_per_minute = value;
+			else if (!strcmp(name, "presses_last_10s"))
+				stats->presses_last_10s = value;
+			else if (!strcmp(name, "peak_presses_per_second"))
+				stats->peak_presses_per_second = value;
 			else if (!strcmp(name, "repeat_events"))
 				stats->repeat_events = value;
 			else if (!strcmp(name, "buffered_events"))
@@ -416,12 +447,17 @@ static int build_json(const struct kb_stats *stats, char *json, size_t cap)
 		    "\"active_keyboards\":%llu,"
 		    "\"uptime_ms\":%llu,"
 		    "\"last_press_ms\":%llu,"
+		    "\"presses_per_minute\":%llu,"
+		    "\"presses_last_10s\":%llu,"
+		    "\"peak_presses_per_second\":%llu,"
 		    "\"repeat_events\":%llu,"
 		    "\"buffered_events\":%llu,"
 		    "\"buffer_dropped\":%llu"
 		    "},",
 		    stats->total_presses, stats->active_keyboards,
 		    stats->uptime_ms, stats->last_press_ms,
+		    stats->presses_per_minute, stats->presses_last_10s,
+		    stats->peak_presses_per_second,
 		    stats->repeat_events, stats->buffered_events,
 		    stats->buffer_dropped) < 0)
 		return -1;

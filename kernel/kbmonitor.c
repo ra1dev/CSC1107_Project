@@ -15,6 +15,7 @@
 #include <linux/input.h>
 #include <linux/jiffies.h>
 #include <linux/kernel.h>
+#include <linux/math64.h>
 #include <linux/module.h>
 #include <linux/slab.h>
 #include <linux/spinlock.h>
@@ -35,6 +36,8 @@
 enum kbmon_view {
 	KBMON_VIEW_SUMMARY = 0,
 	KBMON_VIEW_KEYS,
+	KBMON_VIEW_EVENTS,
+	KBMON_VIEW_STATUS,
 	KBMON_VIEW_TEXT,
 };
 
@@ -46,6 +49,7 @@ struct kbmon_state {
 	u64 last_press_jiffies;
 	u64 buffer_dropped;
 	u64 event_times[KBMON_EVENT_BUF];
+	unsigned int event_codes[KBMON_EVENT_BUF];
 	u64 key_counts[KBMON_KEY_COUNT];
 	unsigned int event_head;
 	unsigned int event_count;
@@ -66,10 +70,21 @@ struct kbmon_snapshot {
 	u64 repeat_events;
 	u64 uptime_ms;
 	u64 last_press_ms;
+	u64 presses_per_minute;
+	u64 presses_last_10s;
+	u64 peak_presses_per_second;
 	u64 buffer_dropped;
 	unsigned int buffered_events;
 	enum kbmon_view view;
 	int active_keyboards;
+};
+
+struct kbmon_events_snapshot {
+	u64 times[KBMON_EVENT_BUF];
+	unsigned int codes[KBMON_EVENT_BUF];
+	unsigned int count;
+	u64 start_jiffies;
+	u64 now_jiffies;
 };
 
 struct kbmon_input_handle {
@@ -196,6 +211,180 @@ static bool kbmon_is_control_key(unsigned int code)
 		return true;
 	default:
 		return false;
+	}
+}
+
+static const char *kbmon_key_label(unsigned int code)
+{
+	switch (code) {
+	case KEY_ESC:
+		return "ESC";
+	case KEY_1:
+		return "1";
+	case KEY_2:
+		return "2";
+	case KEY_3:
+		return "3";
+	case KEY_4:
+		return "4";
+	case KEY_5:
+		return "5";
+	case KEY_6:
+		return "6";
+	case KEY_7:
+		return "7";
+	case KEY_8:
+		return "8";
+	case KEY_9:
+		return "9";
+	case KEY_0:
+		return "0";
+	case KEY_MINUS:
+		return "MINUS";
+	case KEY_EQUAL:
+		return "EQUAL";
+	case KEY_BACKSPACE:
+		return "BACKSPACE";
+	case KEY_TAB:
+		return "TAB";
+	case KEY_Q:
+		return "Q";
+	case KEY_W:
+		return "W";
+	case KEY_E:
+		return "E";
+	case KEY_R:
+		return "R";
+	case KEY_T:
+		return "T";
+	case KEY_Y:
+		return "Y";
+	case KEY_U:
+		return "U";
+	case KEY_I:
+		return "I";
+	case KEY_O:
+		return "O";
+	case KEY_P:
+		return "P";
+	case KEY_LEFTBRACE:
+		return "LEFTBRACE";
+	case KEY_RIGHTBRACE:
+		return "RIGHTBRACE";
+	case KEY_ENTER:
+		return "ENTER";
+	case KEY_LEFTCTRL:
+		return "LEFTCTRL";
+	case KEY_A:
+		return "A";
+	case KEY_S:
+		return "S";
+	case KEY_D:
+		return "D";
+	case KEY_F:
+		return "F";
+	case KEY_G:
+		return "G";
+	case KEY_H:
+		return "H";
+	case KEY_J:
+		return "J";
+	case KEY_K:
+		return "K";
+	case KEY_L:
+		return "L";
+	case KEY_SEMICOLON:
+		return "SEMICOLON";
+	case KEY_APOSTROPHE:
+		return "APOSTROPHE";
+	case KEY_GRAVE:
+		return "GRAVE";
+	case KEY_LEFTSHIFT:
+		return "LEFTSHIFT";
+	case KEY_BACKSLASH:
+		return "BACKSLASH";
+	case KEY_Z:
+		return "Z";
+	case KEY_X:
+		return "X";
+	case KEY_C:
+		return "C";
+	case KEY_V:
+		return "V";
+	case KEY_B:
+		return "B";
+	case KEY_N:
+		return "N";
+	case KEY_M:
+		return "M";
+	case KEY_COMMA:
+		return "COMMA";
+	case KEY_DOT:
+		return "DOT";
+	case KEY_SLASH:
+		return "SLASH";
+	case KEY_RIGHTSHIFT:
+		return "RIGHTSHIFT";
+	case KEY_LEFTALT:
+		return "LEFTALT";
+	case KEY_SPACE:
+		return "SPACE";
+	case KEY_CAPSLOCK:
+		return "CAPSLOCK";
+	case KEY_F1:
+		return "F1";
+	case KEY_F2:
+		return "F2";
+	case KEY_F3:
+		return "F3";
+	case KEY_F4:
+		return "F4";
+	case KEY_F5:
+		return "F5";
+	case KEY_F6:
+		return "F6";
+	case KEY_F7:
+		return "F7";
+	case KEY_F8:
+		return "F8";
+	case KEY_F9:
+		return "F9";
+	case KEY_F10:
+		return "F10";
+	case KEY_F11:
+		return "F11";
+	case KEY_F12:
+		return "F12";
+	case KEY_RIGHTCTRL:
+		return "RIGHTCTRL";
+	case KEY_RIGHTALT:
+		return "RIGHTALT";
+	case KEY_HOME:
+		return "HOME";
+	case KEY_UP:
+		return "UP";
+	case KEY_PAGEUP:
+		return "PAGEUP";
+	case KEY_LEFT:
+		return "LEFT";
+	case KEY_RIGHT:
+		return "RIGHT";
+	case KEY_END:
+		return "END";
+	case KEY_DOWN:
+		return "DOWN";
+	case KEY_PAGEDOWN:
+		return "PAGEDOWN";
+	case KEY_INSERT:
+		return "INSERT";
+	case KEY_DELETE:
+		return "DELETE";
+	case KEY_LEFTMETA:
+		return "LEFTMETA";
+	case KEY_RIGHTMETA:
+		return "RIGHTMETA";
+	default:
+		return "UNKNOWN";
 	}
 }
 
@@ -465,6 +654,7 @@ static void kbmon_record_press_locked(u64 now, unsigned int code)
 		kbmon.key_counts[code]++;
 
 	kbmon.event_times[kbmon.event_head] = now;
+	kbmon.event_codes[kbmon.event_head] = code;
 	kbmon.event_head = (kbmon.event_head + 1) % KBMON_EVENT_BUF;
 	if (kbmon.event_count < KBMON_EVENT_BUF)
 		kbmon.event_count++;
@@ -482,6 +672,7 @@ static void kbmon_reset_locked(u64 now)
 	kbmon.event_head = 0;
 	kbmon.event_count = 0;
 	memset(kbmon.event_times, 0, sizeof(kbmon.event_times));
+	memset(kbmon.event_codes, 0, sizeof(kbmon.event_codes));
 	memset(kbmon.key_counts, 0, sizeof(kbmon.key_counts));
 	kbmon.view = KBMON_VIEW_SUMMARY;
 #ifdef ENABLE_TEXT_MODE
@@ -498,6 +689,14 @@ static void kbmon_snapshot_stats(struct kbmon_snapshot *snap)
 	u64 now = get_jiffies_64();
 	u64 start;
 	u64 last;
+	u64 ten_seconds = msecs_to_jiffies(10000);
+	u64 cutoff_10s = now > ten_seconds ? now - ten_seconds : 0;
+	u64 one_second = msecs_to_jiffies(1000);
+	u64 event_times[KBMON_EVENT_BUF];
+	unsigned int event_count;
+	unsigned int i;
+	unsigned int j;
+	u64 peak = 0;
 
 	spin_lock_irqsave(&kbmon.lock, flags);
 	start = kbmon.start_jiffies;
@@ -507,11 +706,35 @@ static void kbmon_snapshot_stats(struct kbmon_snapshot *snap)
 	snap->buffer_dropped = kbmon.buffer_dropped;
 	snap->buffered_events = kbmon.event_count;
 	snap->view = kbmon.view;
+	memcpy(event_times, kbmon.event_times, sizeof(event_times));
+	event_count = kbmon.event_count;
 	spin_unlock_irqrestore(&kbmon.lock, flags);
 
 	snap->active_keyboards = atomic_read(&kbmon.active_keyboards);
 	snap->uptime_ms = jiffies64_to_msecs(now - start);
 	snap->last_press_ms = last ? jiffies64_to_msecs(last - start) : 0;
+	snap->presses_per_minute = snap->uptime_ms ?
+		div64_u64(snap->total_presses * 60000ULL, snap->uptime_ms) : 0;
+	snap->presses_last_10s = 0;
+	snap->peak_presses_per_second = 0;
+
+	for (i = 0; i < event_count; i++) {
+		u64 window = 0;
+
+		if (event_times[i] > cutoff_10s)
+			snap->presses_last_10s++;
+
+		for (j = 0; j < event_count; j++) {
+			if (event_times[j] >= event_times[i] &&
+			    event_times[j] < event_times[i] + one_second)
+				window++;
+		}
+
+		if (window > peak)
+			peak = window;
+	}
+
+	snap->peak_presses_per_second = peak;
 }
 
 static void kbmon_copy_key_counts(u64 *key_counts)
@@ -520,6 +743,28 @@ static void kbmon_copy_key_counts(u64 *key_counts)
 
 	spin_lock_irqsave(&kbmon.lock, flags);
 	memcpy(key_counts, kbmon.key_counts, sizeof(kbmon.key_counts));
+	spin_unlock_irqrestore(&kbmon.lock, flags);
+}
+
+static void kbmon_copy_events(struct kbmon_events_snapshot *events)
+{
+	unsigned long flags;
+	unsigned int first;
+	unsigned int i;
+
+	spin_lock_irqsave(&kbmon.lock, flags);
+	events->count = kbmon.event_count;
+	events->start_jiffies = kbmon.start_jiffies;
+	events->now_jiffies = get_jiffies_64();
+	first = (kbmon.event_head + KBMON_EVENT_BUF - kbmon.event_count) %
+		KBMON_EVENT_BUF;
+
+	for (i = 0; i < kbmon.event_count; i++) {
+		unsigned int index = (first + i) % KBMON_EVENT_BUF;
+
+		events->times[i] = kbmon.event_times[index];
+		events->codes[i] = kbmon.event_codes[index];
+	}
 	spin_unlock_irqrestore(&kbmon.lock, flags);
 }
 
@@ -548,6 +793,9 @@ static int kbmon_format_summary(char *out, int size,
 			 "active_keyboards=%d\n"
 			 "uptime_ms=%llu\n"
 			 "last_press_ms=%llu\n"
+			 "presses_per_minute=%llu\n"
+			 "presses_last_10s=%llu\n"
+			 "peak_presses_per_second=%llu\n"
 			 "repeat_events=%llu\n"
 			 "buffered_events=%u\n"
 			 "buffer_dropped=%llu\n",
@@ -555,6 +803,9 @@ static int kbmon_format_summary(char *out, int size,
 			 snap->active_keyboards,
 			 (unsigned long long)snap->uptime_ms,
 			 (unsigned long long)snap->last_press_ms,
+			 (unsigned long long)snap->presses_per_minute,
+			 (unsigned long long)snap->presses_last_10s,
+			 (unsigned long long)snap->peak_presses_per_second,
 			 (unsigned long long)snap->repeat_events,
 			 snap->buffered_events,
 			 (unsigned long long)snap->buffer_dropped);
@@ -661,21 +912,132 @@ static int kbmon_format_keys(char *out, int size,
 
 	for (i = 0; i < KBMON_TOP_KEYS; i++) {
 		len = kbmon_append(out, size, len,
+				   "top_%d_key=%s\n"
 				   "top_%d_code=%u\n"
 				   "top_%d_count=%llu\n",
+				   i + 1, kbmon_key_label(top_codes[i]),
 				   i + 1, top_codes[i],
 				   i + 1,
 				   (unsigned long long)top_counts[i]);
 	}
 
 	for (code = 0; code < KBMON_KEY_COUNT; code++) {
-		if (counts[code])
+		if (counts[code]) {
 			len = kbmon_append(out, size, len, "key_%u=%llu\n",
 					   code,
 					   (unsigned long long)counts[code]);
+			len = kbmon_append(out, size, len,
+					   "key_%u_label=%s\n",
+					   code, kbmon_key_label(code));
+		}
 	}
 
 	kfree(counts);
+	return len;
+}
+
+static const char *kbmon_view_name(enum kbmon_view view)
+{
+	switch (view) {
+	case KBMON_VIEW_SUMMARY:
+		return "summary";
+	case KBMON_VIEW_KEYS:
+		return "keys";
+	case KBMON_VIEW_EVENTS:
+		return "events";
+	case KBMON_VIEW_STATUS:
+		return "status";
+	case KBMON_VIEW_TEXT:
+		return "text";
+	default:
+		return "unknown";
+	}
+}
+
+static int kbmon_format_status(char *out, int size,
+			       const struct kbmon_snapshot *snap)
+{
+#ifdef ENABLE_TEXT_MODE
+	unsigned long flags;
+	bool text_mode_enabled = false;
+
+	spin_lock_irqsave(&kbmon.lock, flags);
+	text_mode_enabled = kbmon.text_mode_enabled;
+	spin_unlock_irqrestore(&kbmon.lock, flags);
+#endif
+
+	return scnprintf(out, size,
+			 "driver=kbmonitor\n"
+			 "view=status\n"
+			 "device=/dev/%s\n"
+			 "module_loaded=yes\n"
+			 "active_keyboards=%d\n"
+			 "current_view=%s\n"
+			 "allow_non_usb=%u\n"
+			 "text_mode_build=%s\n"
+#ifdef ENABLE_TEXT_MODE
+			 "text_mode_enabled=%u\n"
+#endif
+			 "event_buffer_capacity=%u\n"
+			 "buffered_events=%u\n"
+			 "buffer_dropped=%llu\n",
+			 KBMON_DEVICE_NAME,
+			 snap->active_keyboards,
+			 kbmon_view_name(snap->view),
+			 allow_non_usb ? 1 : 0,
+#ifdef ENABLE_TEXT_MODE
+			 "yes",
+			 text_mode_enabled ? 1 : 0,
+#else
+			 "no",
+#endif
+			 KBMON_EVENT_BUF,
+			 snap->buffered_events,
+			 (unsigned long long)snap->buffer_dropped);
+}
+
+static int kbmon_format_events(char *out, int size,
+			       const struct kbmon_snapshot *snap)
+{
+	struct kbmon_events_snapshot events;
+	unsigned int i;
+	int len;
+
+	kbmon_copy_events(&events);
+
+	len = scnprintf(out, size,
+			"driver=kbmonitor\n"
+			"view=events\n"
+			"event_count=%u\n"
+			"event_capacity=%u\n"
+			"buffer_dropped=%llu\n",
+			events.count,
+			KBMON_EVENT_BUF,
+			(unsigned long long)snap->buffer_dropped);
+
+	for (i = 0; i < events.count; i++) {
+		u64 since_start_ms =
+			jiffies64_to_msecs(events.times[i] -
+					   events.start_jiffies);
+		u64 age_ms =
+			jiffies64_to_msecs(events.now_jiffies -
+					   events.times[i]);
+
+		len = kbmon_append(out, size, len,
+				   "event_%u_ms=%llu\n"
+				   "event_%u_age_ms=%llu\n"
+				   "event_%u_key=%s\n"
+				   "event_%u_code=%u\n",
+				   i + 1,
+				   (unsigned long long)since_start_ms,
+				   i + 1,
+				   (unsigned long long)age_ms,
+				   i + 1,
+				   kbmon_key_label(events.codes[i]),
+				   i + 1,
+				   events.codes[i]);
+	}
+
 	return len;
 }
 
@@ -695,6 +1057,10 @@ static ssize_t kbmon_read(struct file *file, char __user *user_buf,
 
 	if (snap.view == KBMON_VIEW_KEYS)
 		len = kbmon_format_keys(out, KBMON_OUT_SIZE, &snap);
+	else if (snap.view == KBMON_VIEW_EVENTS)
+		len = kbmon_format_events(out, KBMON_OUT_SIZE, &snap);
+	else if (snap.view == KBMON_VIEW_STATUS)
+		len = kbmon_format_status(out, KBMON_OUT_SIZE, &snap);
 #ifdef ENABLE_TEXT_MODE
 	else if (snap.view == KBMON_VIEW_TEXT)
 		len = kbmon_format_text(out, KBMON_OUT_SIZE);
@@ -765,6 +1131,24 @@ static ssize_t kbmon_write(struct file *file, const char __user *user_buf,
 		spin_unlock_irqrestore(&kbmon.lock, flags);
 		*ppos = 0;
 		pr_info("kbmonitor: key analytics view selected\n");
+		return count;
+	}
+
+	if (!strcmp(cmd, "view events")) {
+		spin_lock_irqsave(&kbmon.lock, flags);
+		kbmon.view = KBMON_VIEW_EVENTS;
+		spin_unlock_irqrestore(&kbmon.lock, flags);
+		*ppos = 0;
+		pr_info("kbmonitor: recent event view selected\n");
+		return count;
+	}
+
+	if (!strcmp(cmd, "view status")) {
+		spin_lock_irqsave(&kbmon.lock, flags);
+		kbmon.view = KBMON_VIEW_STATUS;
+		spin_unlock_irqrestore(&kbmon.lock, flags);
+		*ppos = 0;
+		pr_info("kbmonitor: status view selected\n");
 		return count;
 	}
 
