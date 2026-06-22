@@ -194,28 +194,53 @@ static const struct heat_key row_space[] = {
 	{ "UP", 103 }, { "DOWN", 108 }, { "RIGHT", 106 },
 };
 
-static void usage(const char *prog)
+static void print_help(FILE *out, const char *prog)
 {
-	fprintf(stderr,
+	fprintf(out,
+		"KBMON HELP\n"
+		"\n"
 		"Usage:\n"
-		"  %s summary              Read Level 1 keyboard activity stats\n"
-		"  %s keys                 Show human-friendly key analytics\n"
-		"  %s heatmap              Render keyboard layout with per-key counts\n"
-		"  %s counts               Alias for heatmap\n"
-		"  %s events               Show recent keypress event history\n"
-		"  %s log                  Print recent keypress log entries\n"
-		"  %s status               Show driver/device status\n"
-		"  %s export               Print report-friendly JSON evidence\n"
-		"  %s raw-keys             Print raw driver key analytics\n"
-		"  %s text                 Enable and view local text demo buffer\n"
-		"  %s clear-text           Clear local text demo buffer\n"
-		"  %s disable-text         Disable local text demo mode\n"
-		"  %s reset                Reset counters, then read stats\n"
-		"  %s watch [sec] [count]  Read stats repeatedly\n"
+		"  %s [command]\n"
+		"\n"
+		"Main commands:\n"
+		"  summary              Quick activity/count check\n"
+		"  keys                 Letters vs digits, top keys, per-key counts\n"
+		"  heatmap              Keyboard layout with per-key counts\n"
+		"  counts               Alias for heatmap\n"
+		"  events               Recent keypress history with timing\n"
+		"  log                  Past Linux key-name log entries\n"
+		"  status               Driver/device status\n"
+		"  export               JSON report evidence\n"
+		"  raw-keys             Raw driver key analytics output\n"
+		"  reset                Clear counters and show summary\n"
+		"  watch [sec] [count]  Repeat summary samples\n"
+		"  help                 Show this help screen\n"
+		"\n"
+		"Optional TEXT_MODE=1 commands:\n"
+		"  text                 Enable and view local text demo buffer\n"
+		"  clear-text           Clear local text demo buffer\n"
+		"  disable-text         Disable local text demo mode\n"
+		"\n"
+		"Direct driver commands:\n"
+		"  echo \"help\" > /dev/kbmonitor; cat /dev/kbmonitor\n"
+		"  echo \"view summary\" > /dev/kbmonitor; cat /dev/kbmonitor\n"
+		"  echo \"view keys\" > /dev/kbmonitor; cat /dev/kbmonitor\n"
+		"  echo \"view events\" > /dev/kbmonitor; cat /dev/kbmonitor\n"
+		"  echo \"view status\" > /dev/kbmonitor; cat /dev/kbmonitor\n"
+		"  echo \"reset\" > /dev/kbmonitor; cat /dev/kbmonitor\n"
+		"  cat /dev/kbmonitor_log\n"
+		"\n"
+		"TLS key-name stream:\n"
+		"  ./user/kbmon_tls HOST PORT --insecure\n"
+		"  ./user/kbmon_tls HOST PORT --ca-file FILE --server-name NAME\n"
 		"\n"
 		"Default command: summary\n",
-		prog, prog, prog, prog, prog, prog, prog, prog, prog, prog,
-		prog, prog, prog, prog);
+		prog);
+}
+
+static void usage(const char *prog)
+{
+	print_help(stderr, prog);
 }
 
 static void explain_open_error(void)
@@ -1000,6 +1025,12 @@ static int watch_summary(int interval_sec, int count)
 int main(int argc, char **argv)
 {
 	const char *cmd = argc >= 2 ? argv[1] : "summary";
+
+	if (!strcmp(cmd, "help") || !strcmp(cmd, "--help") ||
+	    !strcmp(cmd, "-h")) {
+		print_help(stdout, argv[0]);
+		return 0;
+	}
 
 	if (!strcmp(cmd, "summary"))
 		return show_summary();

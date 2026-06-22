@@ -337,6 +337,7 @@ sudo rmmod kbmonitor
 From the project root after loading the module:
 
 ```bash
+./user/kbmon help
 ./user/kbmon summary
 ./user/kbmon keys
 ./user/kbmon heatmap
@@ -351,6 +352,9 @@ From the project root after loading the module:
 Manual `/dev/kbmonitor` interaction:
 
 ```bash
+echo "help" > /dev/kbmonitor
+cat /dev/kbmonitor
+
 echo "view summary" > /dev/kbmonitor
 cat /dev/kbmonitor
 

@@ -40,6 +40,7 @@ enum kbmon_view {
 	KBMON_VIEW_KEYS,
 	KBMON_VIEW_EVENTS,
 	KBMON_VIEW_STATUS,
+	KBMON_VIEW_HELP,
 	KBMON_VIEW_TEXT,
 };
 
@@ -949,11 +950,59 @@ static const char *kbmon_view_name(enum kbmon_view view)
 		return "events";
 	case KBMON_VIEW_STATUS:
 		return "status";
+	case KBMON_VIEW_HELP:
+		return "help";
 	case KBMON_VIEW_TEXT:
 		return "text";
 	default:
 		return "unknown";
 	}
+}
+
+static int kbmon_format_help(char *out, int size)
+{
+	return scnprintf(out, size,
+			 "driver=kbmonitor\n"
+			 "view=help\n"
+			 "description=USB keyboard activity monitor LKM\n"
+			 "\n"
+			 "User-space helper commands:\n"
+			 "  ./user/kbmon summary        quick activity/count check\n"
+			 "  ./user/kbmon keys           key categories, top keys, per-key counts\n"
+			 "  ./user/kbmon heatmap        keyboard layout with per-key counts\n"
+			 "  ./user/kbmon events         recent keypress history with timing\n"
+			 "  ./user/kbmon log            recent Linux key-name log entries\n"
+			 "  ./user/kbmon status         driver/device status\n"
+			 "  ./user/kbmon export         JSON report evidence\n"
+			 "  ./user/kbmon reset          clear counters and log buffer\n"
+			 "  ./user/kbmon watch S N      repeat summary every S seconds, N times\n"
+			 "  ./user/kbmon help           show this feature list\n"
+			 "\n"
+			 "Direct /dev/kbmonitor commands:\n"
+			 "  help or view help           show this help view\n"
+			 "  view summary                select summary output\n"
+			 "  view keys                   select key analytics output\n"
+			 "  view events                 select recent events output\n"
+			 "  view status                 select driver status output\n"
+			 "  mode count                  summary mode, disables text mode if built\n"
+			 "  mode analytics              key analytics mode\n"
+			 "  reset                       clear counters and key-name log\n"
+			 "\n"
+			 "Optional TEXT_MODE=1 commands:\n"
+			 "  mode text                   enable local text demo mode\n"
+			 "  view text                   read local text demo buffer\n"
+			 "  clear_text                  clear local text demo buffer\n"
+			 "\n"
+			 "Key-name log device:\n"
+			 "  cat /dev/kbmonitor_log      read bounded past key-name log\n"
+			 "\n"
+			 "TLS helper:\n"
+			 "  ./user/kbmon_tls HOST PORT --insecure\n"
+			 "  ./user/kbmon_tls HOST PORT --ca-file FILE --server-name NAME\n"
+			 "\n"
+			 "Privacy:\n"
+			 "  Level 1 and Level 2 do not reconstruct typed text.\n"
+			 "  TLS export sends key names from /dev/kbmonitor_log, not text mode.\n");
 }
 
 static int kbmon_format_status(char *out, int size,
@@ -1064,6 +1113,8 @@ static ssize_t kbmon_read(struct file *file, char __user *user_buf,
 		len = kbmon_format_events(out, KBMON_OUT_SIZE, &snap);
 	else if (snap.view == KBMON_VIEW_STATUS)
 		len = kbmon_format_status(out, KBMON_OUT_SIZE, &snap);
+	else if (snap.view == KBMON_VIEW_HELP)
+		len = kbmon_format_help(out, KBMON_OUT_SIZE);
 #ifdef ENABLE_TEXT_MODE
 	else if (snap.view == KBMON_VIEW_TEXT)
 		len = kbmon_format_text(out, KBMON_OUT_SIZE);
@@ -1107,6 +1158,15 @@ static ssize_t kbmon_write(struct file *file, const char __user *user_buf,
 		spin_unlock_irqrestore(&kbmon.lock, flags);
 		*ppos = 0;
 		pr_info("kbmonitor: counters reset from user space\n");
+		return count;
+	}
+
+	if (!strcmp(cmd, "help") || !strcmp(cmd, "view help")) {
+		spin_lock_irqsave(&kbmon.lock, flags);
+		kbmon.view = KBMON_VIEW_HELP;
+		spin_unlock_irqrestore(&kbmon.lock, flags);
+		*ppos = 0;
+		pr_info("kbmonitor: help view selected\n");
 		return count;
 	}
 
