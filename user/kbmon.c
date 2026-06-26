@@ -230,9 +230,10 @@ static void print_help(FILE *out, const char *prog)
 		"  echo \"reset\" > /dev/kbmonitor; cat /dev/kbmonitor\n"
 		"  cat /dev/kbmonitor_log\n"
 		"\n"
-		"TLS key-name stream:\n"
+		"TLS statistics logger:\n"
+		"  ./user/kbmon_tls help\n"
 		"  ./user/kbmon_tls HOST PORT --insecure\n"
-		"  ./user/kbmon_tls HOST PORT --ca-file FILE --server-name NAME\n"
+		"  ./user/kbmon_tls HOST PORT --interval 5 --ca-file FILE\n"
 		"\n"
 		"Default command: summary\n",
 		prog);

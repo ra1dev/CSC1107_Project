@@ -996,13 +996,14 @@ static int kbmon_format_help(char *out, int size)
 			 "Key-name log device:\n"
 			 "  cat /dev/kbmonitor_log      read bounded past key-name log\n"
 			 "\n"
-			 "TLS helper:\n"
+			 "TLS statistics logger:\n"
+			 "  ./user/kbmon_tls help\n"
 			 "  ./user/kbmon_tls HOST PORT --insecure\n"
-			 "  ./user/kbmon_tls HOST PORT --ca-file FILE --server-name NAME\n"
+			 "  ./user/kbmon_tls HOST PORT --interval 5 --ca-file FILE\n"
 			 "\n"
 			 "Privacy:\n"
 			 "  Level 1 and Level 2 do not reconstruct typed text.\n"
-			 "  TLS export sends key names from /dev/kbmonitor_log, not text mode.\n");
+			 "  TLS export sends aggregate statistics only; no individual key names.\n");
 }
 
 static int kbmon_format_status(char *out, int size,
