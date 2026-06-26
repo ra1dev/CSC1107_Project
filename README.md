@@ -209,26 +209,33 @@ Safer guided demo:
 bash scripts/text_demo.sh
 ```
 
-### TLS Key-Name Log Export
+### TLS Encrypted Statistics Export
 
-The TLS exporter opens one TLS connection, watches `/dev/kbmonitor_log`, and
-streams new Linux key-name events such as `KEY_A` and `KEY_ENTER` as JSON
-lines. It does not read or send `view text`.
+The TLS exporter reads aggregate keyboard statistics from `/dev/kbmonitor` and
+sends them encrypted to a remote server on a configurable interval. Individual
+keystrokes are never transmitted; only aggregate counts are exported.
 
 Implemented files:
 
 - TLS client: `user/kbmon_tls.c`
 - TLS receiver: `server/tls_receiver.py`
 - Certificate helper: `scripts/generate_tls_cert.sh`
-- Client helper: `scripts/tls_client_demo.sh`
+- Pi deployment helper: `scripts/deploy_certs_to_pi.sh`
 
-The exported JSON includes:
+The exported JSON snapshot includes:
 
-- a `stream_start` JSON line with log metadata
-- one `key_event` JSON line per new key-name entry
-- event sequence number, timestamp, code, and key name
-- explicit privacy markers: `"exports_key_names": true` and
+- `summary`: total presses, rates, uptime, active keyboards
+- `categories`: letters, digits, modifiers, navigation, function, control, other
+- `top_keys`: top 10 keys by count with label, code, and count
+- `per_key`: every non-zero key with label, code, and count
+- explicit privacy markers: `"exports_individual_keys": false` and
   `"exports_text": false`
+
+Two TLS modes are supported:
+
+- **One-way TLS**: the Pi verifies the server's identity; no client verification
+- **Mutual TLS (mTLS)**: both the Pi and the server verify each other's identity,
+  preventing man-in-the-middle attacks and rejecting unauthorised clients
 
 ## Requirements
 
@@ -411,45 +418,19 @@ bash scripts/text_demo.sh
 
 ## TLS Demo
 
-The TLS demo uses two terminals or two machines:
+The TLS demo uses two machines:
 
-- **Receiver machine**: laptop/server that listens for encrypted JSON lines.
-- **Sender machine**: Raspberry Pi running `kbmonitor` and `user/kbmon_tls`.
+- **Server machine**: laptop or PC that receives encrypted statistics.
+- **Raspberry Pi**: runs `kbmonitor` and sends statistics via `kbmon_tls`.
 
-The Raspberry Pi must have the module loaded before sending TLS data:
+Load the module on the Pi before starting:
 
 ```bash
-cd ~/linux/CSC1107OS/kbmonitor
-sudo rmmod kbmonitor 2>/dev/null || true
-make clean
-make
 sudo insmod kernel/kbmonitor.ko
 sudo chmod 666 /dev/kbmonitor
-./user/kbmon summary
-./user/kbmon keys
 ```
 
-### 1. Start The TLS Receiver
-
-On the receiver machine, generate a self-signed demo certificate:
-
-```bash
-bash scripts/generate_tls_cert.sh
-```
-
-Start the receiver on port `8443`:
-
-```bash
-python3 server/tls_receiver.py --cert server/server.crt --key server/server.key --port 8443
-```
-
-Expected receiver message:
-
-```text
-[tls-receiver] listening on 0.0.0.0:8443
-```
-
-Find the receiver machine's IP address.
+Find the server machine's IP address.
 
 Linux:
 
@@ -463,77 +444,108 @@ Windows PowerShell:
 ipconfig
 ```
 
-Use the receiver's IPv4 address as `<SERVER_IP>`.
+Use the server's IPv4 address as `<SERVER_IP>` and the Pi's as `<PI_IP>`.
 
-### 2. Send Key-Name Logs From The Raspberry Pi
+### One-Way TLS
 
-Start the encrypted key-name event stream:
+The Pi verifies the server. The server accepts any client.
+
+**On the server (once):**
+
+```bash
+rm -f server/server.crt server/server.key
+bash scripts/generate_tls_cert.sh <SERVER_IP>
+```
+
+**On the server (every time):**
+
+```bash
+python3 server/tls_receiver.py --cert server/server.crt --key server/server.key
+```
+
+**On the Pi:**
 
 ```bash
 ./user/kbmon_tls <SERVER_IP> 8443 --insecure
 ```
 
-Example:
+### Mutual TLS (Two-Way)
+
+Both the Pi and the server verify each other's identity. The server rejects
+any client that does not hold the matching client certificate, preventing
+man-in-the-middle attacks.
+
+**On the server (once):**
 
 ```bash
-./user/kbmon_tls 192.168.1.50 8443 --insecure
+rm -f server/server.crt server/server.key
+bash scripts/generate_tls_cert.sh <SERVER_IP>
+bash scripts/deploy_certs_to_pi.sh <PI_IP> <PI_USER> /home/<PI_USER>/linux/osproject/server
 ```
 
-Or use the helper:
+**On the server (every time):**
 
 ```bash
-bash scripts/tls_client_demo.sh <SERVER_IP> 8443
+python3 server/tls_receiver.py --cert server/server.crt --key server/server.key --client-cert server/client.crt
 ```
 
-Stream ten new key events and then exit:
+**On the Pi (auto-detects all certs):**
 
 ```bash
-./user/kbmon_tls <SERVER_IP> 8443 --interval 1 --count 10 --insecure
+./user/kbmon_tls <SERVER_IP> 8443
 ```
 
-Verified self-signed demo mode:
+### TLS Options
 
 ```bash
-bash scripts/generate_tls_cert.sh
-./user/kbmon_tls <SERVER_IP> 8443 --ca-file server/server.crt --server-name kbmonitor-demo
+./user/kbmon_tls --help
 ```
 
-The helper also supports verified mode:
+| Option | Description | Default |
+|---|---|---|
+| `--interval SEC` | Send a snapshot every SEC seconds | 5 |
+| `--count N` | Stop after N snapshots | run forever |
+| `--ca-file FILE` | CA cert to verify server | `server/server.crt` |
+| `--client-cert FILE` | Client cert for mutual TLS | `server/client.crt` |
+| `--client-key FILE` | Client private key | `server/client.key` |
+| `--insecure` | Disable server verification | off |
 
-```bash
-bash scripts/tls_client_demo.sh <SERVER_IP> 8443 --verify
-```
+### Expected Output
 
-Expected sender output:
+Server:
 
 ```text
-streaming TLS key log events to 192.168.1.50:8443
-sent key event seq=12 key=KEY_A to 192.168.1.50:8443
+[tls-receiver] mutual TLS enabled — requiring client cert from server/client.crt
+[tls-receiver] listening on 0.0.0.0:8443
+[tls-receiver] connection from 192.168.1.199:XXXXX
+[2026-...] SESSION START host=raspberrypi interval=5s
+[2026-...] host=raspberrypi sample=1 total=42 rate=164/min last10s=8 letters=25 digits=3 mods=4
 ```
 
-Expected receiver output is newline-delimited JSON similar to:
+Pi:
 
-```json
-{"schema":"kbmonitor.keylog.stream.v1","type":"stream_start","source":"kbmonitor_log","device":"/dev/kbmonitor_log","host":"raspberrypi","unix_time":1782144000,"privacy":{"exports_key_names":true,"exports_text":false},"log":{"events":2,"capacity":128,"dropped":0,"latest_seq":11}}
-{"schema":"kbmonitor.keylog.stream.v1","type":"key_event","source":"kbmonitor_log","unix_time":1782144001,"event":{"seq":12,"time_ms":14022,"code":30,"key":"KEY_A"}}
+```text
+info: mutual TLS enabled (client cert: server/client.crt)
+sending keyboard statistics to 192.168.1.201:8443 every 5 second(s)
+sent sample 1: total=42 rate=164/min last10s=8
 ```
 
-`--insecure` is intended only for quick self-signed lab demos. It still uses an
-encrypted TLS connection, but disables peer certificate verification. For the
-stronger demo path, use `--ca-file server/server.crt --server-name
-kbmonitor-demo`.
+Statistics are logged to `kbstats.log` on the server by default.
 
-Important privacy rule: `kbmon_tls` exports Linux key-name log entries from
-`/dev/kbmonitor_log`. It does not read `view text`, does not send the Level 3
-text buffer, and the JSON includes `"exports_text": false`.
+### Troubleshooting TLS
 
 If the connection fails:
 
 - Confirm both machines are on the same network.
-- Confirm `<SERVER_IP>` is the receiver IP, not the Pi IP.
-- Confirm the receiver script is still running.
-- Allow inbound TCP port `8443` through the receiver firewall if needed.
-- Confirm `/dev/kbmonitor` exists on the Pi.
+- Confirm `<SERVER_IP>` is the server IP, not the Pi IP.
+- Confirm the receiver is still running.
+- Allow inbound TCP port `8443` through the server firewall if needed.
+- Confirm `/dev/kbmonitor` exists on the Pi (`sudo insmod kernel/kbmonitor.ko`).
+- For mTLS errors (`PEER_DID_NOT_RETURN_A_CERTIFICATE`), confirm the three cert
+  files exist in `server/` on the Pi and rerun `deploy_certs_to_pi.sh` if not.
+- For `certificate verify failed`, the cert was generated with the wrong IP.
+  Delete `server/server.crt` and `server/server.key` and regenerate with the
+  correct server IP.
 
 ## Project Structure
 
@@ -553,16 +565,17 @@ server/
   tls_receiver.py     Minimal TLS JSON receiver
 
 scripts/
-  build.sh            Build helper
-  load.sh             Load module and prepare device nodes
-  unload.sh           Remove module
-  demo.sh             Main coursework demo flow
-  text_demo.sh        Optional Level 3 demo
-  setup_pi.sh         Raspberry Pi dependency/setup helper
-  validate_all.sh     End-to-end validation/evidence helper
-  generate_tls_cert.sh
-  tls_client_demo.sh
-  package_source.sh
+  build.sh               Build helper
+  load.sh                Load module and prepare device nodes
+  unload.sh              Remove module
+  demo.sh                Main coursework demo flow
+  text_demo.sh           Optional Level 3 demo
+  setup_pi.sh            Raspberry Pi dependency/setup helper
+  validate_all.sh        End-to-end validation/evidence helper
+  generate_tls_cert.sh   Generate server and client TLS certificates
+  deploy_certs_to_pi.sh  Copy TLS certificates to the Pi over SSH
+  tls_client_demo.sh     Quick TLS demo helper
+  package_source.sh      Source packaging helper
 
 docs/
   test_plan.md
@@ -591,8 +604,10 @@ Safety and privacy:
 - `/dev/kbmonitor_log` stores bounded recent keypress events as Linux key names,
   not reconstructed text.
 - Level 3 is compile-time gated and runtime opt-in.
-- TLS export streams new `/dev/kbmonitor_log` key-name entries.
+- TLS export sends only aggregate statistics; no individual key names or text.
 - TLS export never sends reconstructed text.
+- Mutual TLS (mTLS) ensures both endpoints are verified, preventing
+  man-in-the-middle attacks and rejecting unauthorised clients.
 
 ## Troubleshooting
 
