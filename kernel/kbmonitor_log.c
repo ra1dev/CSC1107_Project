@@ -26,6 +26,12 @@
 #define KBMON_LOG_EVENTS      128
 #define KBMON_LOG_OUT_SIZE    16384
 
+/*
+ * /dev/kbmonitor_log stores a bounded sequence of recent key names for local
+ * demonstration.  It is kept separate from /dev/kbmonitor so aggregate
+ * statistics and event-by-event log output can be described and tested
+ * independently.
+ */
 struct kbmon_log_event {
 	u64 seq;
 	u64 time_ms;
@@ -48,6 +54,10 @@ static struct kbmon_log_state kbmon_log;
 
 #define KBMON_KEY_NAME(name) case KEY_##name: return "KEY_" #name
 
+/*
+ * Convert common Linux input key codes into stable names for the log output.
+ * Unknown keys are still printed by numeric code so no event is silently lost.
+ */
 static const char *kbmon_log_key_name(unsigned int code)
 {
 	switch (code) {
@@ -198,6 +208,7 @@ void kbmon_log_reset(void)
 {
 	unsigned long flags;
 
+	/* Reset the bounded log while holding the same lock used by writers. */
 	spin_lock_irqsave(&kbmon_log.lock, flags);
 	kbmon_log.next_seq = 0;
 	kbmon_log.dropped = 0;
@@ -212,6 +223,10 @@ void kbmon_log_record(u64 start_jiffies, u64 now, unsigned int code)
 	struct kbmon_log_event *event;
 	unsigned long flags;
 
+	/*
+	 * The log is a ring buffer.  When it fills, new events replace the oldest
+	 * entries and dropped records how many historical entries were overwritten.
+	 */
 	spin_lock_irqsave(&kbmon_log.lock, flags);
 	event = &kbmon_log.events[kbmon_log.head];
 	event->seq = kbmon_log.next_seq++;
@@ -240,6 +255,10 @@ static int kbmon_log_format(char *out, int size)
 	if (!events)
 		return scnprintf(out, size, "error=ENOMEM\n");
 
+	/*
+	 * Copy log entries out while locked, then format after unlocking.  This
+	 * avoids holding a spinlock during the slower string-building loop.
+	 */
 	spin_lock_irqsave(&kbmon_log.lock, flags);
 	count = kbmon_log.count;
 	dropped = kbmon_log.dropped;
@@ -291,6 +310,7 @@ static ssize_t kbmon_log_read(struct file *file, char __user *user_buf,
 	if (!out)
 		return -ENOMEM;
 
+	/* simple_read_from_buffer gives normal file-like read behaviour. */
 	len = kbmon_log_format(out, KBMON_LOG_OUT_SIZE);
 	ret = simple_read_from_buffer(user_buf, count, ppos, out, len);
 	kfree(out);
@@ -310,6 +330,7 @@ static int kbmon_log_release(struct inode *inode, struct file *file)
 }
 
 static const struct file_operations kbmon_log_fops = {
+	/* /dev/kbmonitor_log is read-only from user space. */
 	.owner = THIS_MODULE,
 	.open = kbmon_log_open,
 	.read = kbmon_log_read,
@@ -321,6 +342,10 @@ int kbmon_log_chrdev_init(struct class *kbmon_class)
 {
 	int err;
 
+	/*
+	 * Reuse the main kbmonitor class so both device nodes appear together
+	 * under /dev, but allocate a separate device number for the log.
+	 */
 	spin_lock_init(&kbmon_log.lock);
 	kbmon_log_reset();
 
@@ -357,6 +382,7 @@ err_unregister_region:
 
 void kbmon_log_chrdev_exit(struct class *kbmon_class)
 {
+	/* Called by the main module cleanup path after input callbacks stop. */
 	device_destroy(kbmon_class, kbmon_log_devno);
 	cdev_del(&kbmon_log_cdev);
 	unregister_chrdev_region(kbmon_log_devno, 1);

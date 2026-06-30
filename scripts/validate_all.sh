@@ -8,6 +8,8 @@ LOG="$LOG_DIR/validate-$STAMP.log"
 
 mkdir -p "$LOG_DIR"
 
+# Print each validation command before running it so the saved log can be used
+# directly as report/demo evidence.
 run() {
   echo
   echo "[validate] $*"
@@ -22,6 +24,8 @@ run_capture() {
 
 exec > >(tee "$LOG") 2>&1
 
+# End-to-end smoke test for the core driver, Level 2 analytics, text-mode build
+# path and TLS certificate helper.
 echo "[validate] kbmonitor validation started at $(date)"
 echo "[validate] Log: $LOG"
 

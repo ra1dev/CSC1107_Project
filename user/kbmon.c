@@ -21,6 +21,10 @@
 #define KBMON_KEY_COUNT 768
 #define KBMON_TOP_KEYS 10
 
+/*
+ * The driver reports Linux key codes.  The CLI maps the common keyboard codes
+ * back to labels so the analytics output is useful during demos and marking.
+ */
 struct key_label {
 	unsigned int code;
 	const char *label;
@@ -117,6 +121,11 @@ struct heat_key {
 	unsigned int code;
 };
 
+/*
+ * Parsed versions of the driver's key=value output.  Keeping parsing separate
+ * from printing lets summary, heatmap, JSON export and event views reuse the
+ * same driver data without changing the kernel interface.
+ */
 struct key_stats {
 	unsigned long long total_presses;
 	unsigned long long active_keyboards;
@@ -161,6 +170,7 @@ static const struct heat_key row_functions[] = {
 	{ "F12", 88 },
 };
 
+/* Approximate physical keyboard rows used by the terminal heatmap view. */
 static const struct heat_key row_numbers[] = {
 	{ "`", 41 }, { "1", 2 }, { "2", 3 }, { "3", 4 },
 	{ "4", 5 }, { "5", 6 }, { "6", 7 }, { "7", 8 },
@@ -276,6 +286,10 @@ static int write_command(int fd, const char *cmd)
 	size_t len = strlen(cmd);
 	ssize_t written = write(fd, cmd, len);
 
+	/*
+	 * Commands are sent exactly as text strings expected by kbmon_write().
+	 * Checking for a short write makes failures obvious during a live demo.
+	 */
 	if (written < 0) {
 		fprintf(stderr, "write(\"%s\") failed: %s\n",
 			cmd, strerror(errno));
@@ -294,6 +308,7 @@ static int read_into_buffer(int fd, char *buf, size_t size)
 {
 	ssize_t n = read(fd, buf, size - 1);
 
+	/* The kernel returns printable text, so terminate it for normal C parsing. */
 	if (n < 0) {
 		perror("read");
 		return -1;
@@ -328,6 +343,11 @@ static int show_view(const char *view_command)
 	if (fd < 0)
 		return 1;
 
+	/*
+	 * The usual interaction pattern is:
+	 *   write("view ...") to select a driver output,
+	 *   read() to retrieve that output.
+	 */
 	if (write_command(fd, view_command) < 0)
 		rc = 1;
 	else if (read_stats(fd) < 0)
@@ -372,6 +392,10 @@ static int show_log(void)
 	ssize_t n;
 	int fd;
 
+	/*
+	 * The key-name log is a separate read-only character device.  It is local
+	 * evidence/debug output and is not used by the TLS exporter.
+	 */
 	fd = open(KBMON_LOG_DEVICE, O_RDONLY);
 	if (fd < 0) {
 		if (errno == ENOENT) {
@@ -418,6 +442,7 @@ static int reset_and_show(void)
 	if (fd < 0)
 		return 1;
 
+	/* Reset first, then request summary so the user can immediately verify it. */
 	if (write_command(fd, "reset") < 0)
 		rc = 1;
 	else if (write_command(fd, "view summary") < 0)
@@ -434,6 +459,10 @@ static void print_text_view(const char *buf)
 	const char *begin = strstr(buf, "text_begin\n");
 	const char *end;
 
+	/*
+	 * Text mode output is marked between text_begin/text_end so metadata such
+	 * as text_len does not get mixed into the reconstructed demo text.
+	 */
 	puts("Local text demo buffer");
 	puts("This is demo-only output from /dev/kbmonitor. It is not sent remotely.");
 	putchar('\n');
@@ -469,6 +498,11 @@ static int show_text(void)
 	if (fd < 0)
 		return 1;
 
+	/*
+	 * The command enables text mode before reading it.  A kernel built without
+	 * TEXT_MODE=1 will reject this path, which keeps the normal build focused
+	 * on statistics.
+	 */
 	if (write_command(fd, "mode text") < 0) {
 		fprintf(stderr,
 			"Text mode is unavailable unless the module is built with TEXT_MODE=1.\n");
@@ -546,6 +580,7 @@ static const char *lookup_key_label(unsigned int code)
 	static char fallback[16];
 	size_t i;
 
+	/* Fall back to KEY_<number> so uncommon keys still appear in output. */
 	for (i = 0; i < sizeof(key_labels) / sizeof(key_labels[0]); i++) {
 		if (key_labels[i].code == code)
 			return key_labels[i].label;
@@ -563,6 +598,7 @@ static int parse_key_counts(const char *text,
 	unsigned long long value;
 	int parsed = 0;
 
+	/* Only parse lines in the form key_<code>=<count>; labels are ignored here. */
 	while (*line) {
 		if (sscanf(line, "key_%u=%llu", &code, &value) == 2 &&
 		    code < KBMON_KEY_COUNT) {
@@ -587,6 +623,10 @@ static int parse_key_stats(const char *text, struct key_stats *stats)
 	unsigned long long value;
 	int parsed_keys = 0;
 
+	/*
+	 * The driver intentionally exposes simple key=value text.  This parser
+	 * accepts both summary fields and per-key counters from the same format.
+	 */
 	while (*line) {
 		if (sscanf(line, "%63[^=]=%llu", name, &value) == 2) {
 			if (!strcmp(name, "total_presses"))
@@ -646,6 +686,7 @@ static void parse_event_line(struct event_stats *events, unsigned int index,
 {
 	struct event_entry *event;
 
+	/* Event numbering in the driver output starts at 1 for readability. */
 	if (index == 0 || index > sizeof(events->events) / sizeof(events->events[0]))
 		return;
 
@@ -720,6 +761,7 @@ static void print_top_keys(const unsigned long long counts[KBMON_KEY_COUNT])
 	int i;
 	int j;
 
+	/* Maintain a small sorted list instead of sorting the whole key array. */
 	for (code = 0; code < KBMON_KEY_COUNT; code++) {
 		if (counts[code] == 0)
 			continue;
@@ -752,6 +794,10 @@ static int collect_key_stats(struct key_stats *stats)
 	char summary_buf[KBMON_READ_BUF];
 	char key_buf[KBMON_READ_BUF];
 
+	/*
+	 * Summary and key analytics are separate driver views.  Combining them in
+	 * user space keeps the kernel output simple and makes this tool flexible.
+	 */
 	memset(stats, 0, sizeof(*stats));
 
 	if (read_view_into_buffer("view summary", summary_buf,
@@ -820,6 +866,10 @@ static int show_heatmap(void)
 	int fd;
 	int rc = 0;
 
+	/*
+	 * This view is named "heatmap" for the demo, but it prints exact per-key
+	 * counts so the output is less ambiguous than intensity-only symbols.
+	 */
 	fd = open_device();
 	if (fd < 0)
 		return 1;
@@ -933,6 +983,11 @@ static int export_json(void)
 	int first = 1;
 	time_t now = time(NULL);
 
+	/*
+	 * Report export is local JSON evidence for screenshots/log collection.
+	 * It includes aggregate stats and recent event metadata, but not the text
+	 * demo buffer.
+	 */
 	if (collect_key_stats(&stats) != 0)
 		return 1;
 
@@ -1010,6 +1065,7 @@ static int watch_summary(int interval_sec, int count)
 {
 	int i = 0;
 
+	/* Lightweight polling mode for showing counters change over time. */
 	while (count == 0 || i < count) {
 		printf("---- sample %d ----\n", i + 1);
 		if (show_summary() != 0)
@@ -1027,6 +1083,7 @@ int main(int argc, char **argv)
 {
 	const char *cmd = argc >= 2 ? argv[1] : "summary";
 
+	/* Keep command dispatch explicit so the demo commands are easy to audit. */
 	if (!strcmp(cmd, "help") || !strcmp(cmd, "--help") ||
 	    !strcmp(cmd, "-h")) {
 		print_help(stdout, argv[0]);

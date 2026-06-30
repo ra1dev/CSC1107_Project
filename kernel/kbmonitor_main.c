@@ -68,6 +68,12 @@ struct kbmon_state {
 #endif
 };
 
+/*
+ * The driver keeps live state in kbmon_state, but read() should not hold the
+ * spinlock while formatting a large text response.  These small snapshot
+ * structs let read paths copy the protected data quickly, then do slower
+ * formatting work after the lock has been released.
+ */
 struct kbmon_snapshot {
 	u64 total_presses;
 	u64 repeat_events;
@@ -105,6 +111,11 @@ module_param(allow_non_usb, bool, 0444);
 MODULE_PARM_DESC(allow_non_usb,
 		 "Allow non-USB keyboard-like devices for development/testing");
 
+/*
+ * These helpers group Linux key codes into human-readable categories for the
+ * "view keys" output.  The kernel still stores raw Linux key codes internally,
+ * but user-space receives both the code and a friendly label/category.
+ */
 static bool kbmon_is_letter_key(unsigned int code)
 {
 	switch (code) {
@@ -392,6 +403,11 @@ static const char *kbmon_key_label(unsigned int code)
 }
 
 #ifdef ENABLE_TEXT_MODE
+/*
+ * Text mode is deliberately compile-time gated and opt-in at runtime.  It is
+ * only a local demonstration of simple US-keyboard reconstruction, while the
+ * normal project path records statistics and key names rather than typed text.
+ */
 static void kbmon_text_clear_locked(void)
 {
 	memset(kbmon.text_buf, 0, sizeof(kbmon.text_buf));
@@ -590,6 +606,11 @@ static void kbmon_text_record_locked(unsigned int code, int value)
 {
 	char ch;
 
+	/*
+	 * Modifier state must be tracked on both press and release events.
+	 * Normal character output is only produced for fresh key presses
+	 * (value == 1), so held-key repeats do not keep appending text.
+	 */
 	if (code == KEY_LEFTSHIFT || code == KEY_RIGHTSHIFT) {
 		kbmon.shift_down = value != 0;
 		return;
@@ -651,6 +672,11 @@ static int kbmon_format_text(char *out, int size)
 
 static void kbmon_record_press_locked(u64 now, unsigned int code)
 {
+	/*
+	 * A small ring buffer stores recent keypress events.  Once full, the
+	 * oldest entry is overwritten and buffer_dropped records how many events
+	 * were lost from the visible history, not from the total counters.
+	 */
 	kbmon.total_presses++;
 	kbmon.last_press_jiffies = now;
 	if (code <= KEY_MAX)
@@ -667,6 +693,7 @@ static void kbmon_record_press_locked(u64 now, unsigned int code)
 
 static void kbmon_reset_locked(u64 now)
 {
+	/* Reset all activity state while preserving the allocated device itself. */
 	kbmon.total_presses = 0;
 	kbmon.repeat_events = 0;
 	kbmon.start_jiffies = now;
@@ -701,6 +728,11 @@ static void kbmon_snapshot_stats(struct kbmon_snapshot *snap)
 	unsigned int j;
 	u64 peak = 0;
 
+	/*
+	 * Copy lock-protected state first, then calculate rates outside the
+	 * critical section.  This keeps input-event handling responsive even if a
+	 * user-space process is repeatedly reading the device.
+	 */
 	spin_lock_irqsave(&kbmon.lock, flags);
 	start = kbmon.start_jiffies;
 	last = kbmon.last_press_jiffies;
@@ -728,6 +760,7 @@ static void kbmon_snapshot_stats(struct kbmon_snapshot *snap)
 			snap->presses_last_10s++;
 
 		for (j = 0; j < event_count; j++) {
+			/* Peak rate is estimated from the recent in-kernel buffer. */
 			if (event_times[j] >= event_times[i] &&
 			    event_times[j] < event_times[i] + one_second)
 				window++;
@@ -755,6 +788,7 @@ static void kbmon_copy_events(struct kbmon_events_snapshot *events)
 	unsigned int first;
 	unsigned int i;
 
+	/* Rebuild the ring buffer in oldest-to-newest order for stable output. */
 	spin_lock_irqsave(&kbmon.lock, flags);
 	events->count = kbmon.event_count;
 	events->start_jiffies = kbmon.start_jiffies;
@@ -789,6 +823,10 @@ static int kbmon_append(char *out, int size, int len, const char *fmt, ...)
 static int kbmon_format_summary(char *out, int size,
 				const struct kbmon_snapshot *snap)
 {
+	/*
+	 * The read interface uses simple key=value text so it can be inspected
+	 * with cat, parsed by the C tools, and shown clearly in demo evidence.
+	 */
 	return scnprintf(out, size,
 			 "driver=kbmonitor\n"
 			 "view=summary\n"
@@ -860,6 +898,10 @@ static int kbmon_format_keys(char *out, int size,
 	if (!counts)
 		return scnprintf(out, size, "error=ENOMEM\n");
 
+	/*
+	 * Per-key counters can be larger than the summary output, so copy them
+	 * into temporary memory before calculating categories and top keys.
+	 */
 	kbmon_copy_key_counts(counts);
 
 	for (code = 0; code < KBMON_KEY_COUNT; code++) {
@@ -1106,6 +1148,11 @@ static ssize_t kbmon_read(struct file *file, char __user *user_buf,
 	if (!out)
 		return -ENOMEM;
 
+	/*
+	 * read() returns whichever view was selected by the latest write()
+	 * command.  This keeps the public interface small while still supporting
+	 * summary, analytics, event history, status, help and optional text views.
+	 */
 	kbmon_snapshot_stats(&snap);
 
 	if (snap.view == KBMON_VIEW_KEYS)
@@ -1150,6 +1197,11 @@ static ssize_t kbmon_write(struct file *file, const char __user *user_buf,
 	cmd_buf[count] = '\0';
 	cmd = strim(cmd_buf);
 
+	/*
+	 * Commands are intentionally text based.  This matches the lab-style
+	 * character-device approach and lets the same interface be tested using
+	 * either kbmon or basic shell commands such as echo and cat.
+	 */
 	if (!strcmp(cmd, "reset")) {
 		u64 now = get_jiffies_64();
 
@@ -1289,6 +1341,7 @@ static int kbmon_release(struct inode *inode, struct file *file)
 }
 
 static const struct file_operations kbmon_fops = {
+	/* Connect /dev/kbmonitor operations to this module's callbacks. */
 	.owner = THIS_MODULE,
 	.open = kbmon_open,
 	.read = kbmon_read,
@@ -1330,6 +1383,11 @@ static void kbmon_input_event(struct input_handle *handle, unsigned int type,
 	spin_unlock_irqrestore(&kbmon.lock, flags);
 #endif
 
+	/*
+	 * Linux EV_KEY uses value 1 for a new press, 0 for release, and 2 for
+	 * auto-repeat while a key is held.  The main total counts only fresh
+	 * presses so releases do not inflate the statistics.
+	 */
 	if (value == 1) {
 		u64 now = get_jiffies_64();
 
@@ -1359,6 +1417,11 @@ static int kbmon_input_connect(struct input_handler *handler,
 	if (!kbmon_is_keyboard(dev))
 		return -ENODEV;
 
+	/*
+	 * Each matching keyboard gets its own input_handle.  The existing Linux
+	 * HID/input driver still owns normal keyboard behaviour; this handle only
+	 * observes events delivered by the input subsystem.
+	 */
 	kh = kzalloc(sizeof(*kh), GFP_KERNEL);
 	if (!kh)
 		return -ENOMEM;
@@ -1423,6 +1486,11 @@ static int kbmon_chrdev_init(void)
 {
 	int err;
 
+	/*
+	 * Standard character-device setup used in the labs: allocate a device
+	 * number, attach file_operations through cdev, create a class, then create
+	 * the visible /dev/kbmonitor node.
+	 */
 	err = alloc_chrdev_region(&kbmon_devno, 0, 1, KBMON_DEVICE_NAME);
 	if (err)
 		return err;
@@ -1477,6 +1545,11 @@ static int __init kbmon_init(void)
 {
 	int err;
 
+	/*
+	 * Initialise state and device nodes before registering the input handler.
+	 * That ordering means any keyboard event arriving after registration has
+	 * valid counters, buffers and /dev interfaces available.
+	 */
 	spin_lock_init(&kbmon.lock);
 	atomic_set(&kbmon.active_keyboards, 0);
 	kbmon_reset_locked(get_jiffies_64());
@@ -1512,6 +1585,10 @@ static int __init kbmon_init(void)
 
 static void __exit kbmon_exit(void)
 {
+	/*
+	 * Cleanup is the reverse of setup.  Stop input callbacks first, then
+	 * remove the log device and main character device.
+	 */
 	input_unregister_handler(&kbmon_input_handler);
 	kbmon_log_chrdev_exit(kbmon_class);
 	kbmon_chrdev_exit();

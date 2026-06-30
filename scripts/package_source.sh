@@ -4,6 +4,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT="${1:-kbmonitor-codes.zip}"
 
+# Package source files for submission while excluding generated build products,
+# certificates, validation logs and other local-only artifacts.
 cd "$ROOT"
 rm -f "$OUT"
 

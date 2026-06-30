@@ -3,6 +3,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+# Full local demonstration flow for the marker/video: build, load, collect
+# activity, show every major view, demonstrate write(), then unload cleanly.
 echo "[demo] Building project"
 bash "$ROOT/scripts/build.sh"
 
@@ -47,6 +49,7 @@ echo "[demo] Report evidence JSON export"
 
 echo
 echo "[demo] Demonstrating write() system call - sending view keys command"
+# This direct echo proves the character device accepts commands through write().
 echo "view keys" | sudo tee /dev/kbmonitor > /dev/null
 "$ROOT/user/kbmon" raw-keys
 

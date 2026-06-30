@@ -3,8 +3,10 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+# Copy only the client-side certificate material needed by the Pi.
 usage() {
-  echo "Usage: $0 <PI_IP> [PI_USER] [PI_PATH]"
+  echo "Usage: $0 PI_IP [PI_USER] [PI_PATH]"
+  echo "Do not include angle brackets around PI_IP, PI_USER, or PI_PATH."
   echo ""
   echo "  PI_IP    IP address of the Raspberry Pi"
   echo "  PI_USER  SSH username on the Pi (default: pi)"
@@ -28,7 +30,7 @@ SERVER_CERT="$ROOT/server/server.crt"
 CLIENT_CERT="$ROOT/server/client.crt"
 CLIENT_KEY="$ROOT/server/client.key"
 
-# Check all required files exist before attempting transfer
+# Check all required files exist before attempting transfer.
 missing=0
 for f in "$SERVER_CERT" "$CLIENT_CERT" "$CLIENT_KEY"; do
   if [[ ! -f "$f" ]]; then
@@ -38,7 +40,7 @@ for f in "$SERVER_CERT" "$CLIENT_CERT" "$CLIENT_KEY"; do
 done
 
 if [[ $missing -eq 1 ]]; then
-  echo "[deploy] Run this first: bash scripts/generate_tls_cert.sh <SERVER_IP>"
+  echo "[deploy] Run this first: bash scripts/generate_tls_cert.sh SERVER_IP"
   exit 1
 fi
 

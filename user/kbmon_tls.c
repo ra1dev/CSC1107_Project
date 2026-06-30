@@ -32,6 +32,11 @@
 #define DEFAULT_CLIENT_CERT "server/client.crt"
 #define DEFAULT_CLIENT_KEY  "server/client.key"
 
+/*
+ * Runtime configuration for the TLS exporter.  Certificate paths are optional
+ * so the demo can run in insecure mode, but the normal coursework path uses
+ * a CA file plus client certificate/key for mutual TLS.
+ */
 struct options {
 	const char *host;
 	const char *port;
@@ -50,6 +55,11 @@ struct tls_client {
 	int fd;
 };
 
+/*
+ * This structure mirrors the aggregate fields exported by /dev/kbmonitor.
+ * It deliberately has no text buffer and no ordered key-name log; TLS export
+ * is for statistics only.
+ */
 struct kb_stats {
 	unsigned long long total_presses;
 	unsigned long long uptime_ms;
@@ -122,6 +132,10 @@ static int append_json_string(char *buf, size_t cap, size_t *len,
 {
 	const unsigned char *p = (const unsigned char *)value;
 
+	/*
+	 * Build JSON manually because the client is small and has no JSON library
+	 * dependency.  Escaping is still needed for key labels and host strings.
+	 */
 	if (appendf(buf, cap, len, "\"") < 0)
 		return -1;
 
@@ -178,6 +192,10 @@ static int kbmon_read_view(const char *cmd, char *buf, size_t size)
 		return -1;
 	}
 
+	/*
+	 * The TLS client uses the same public character-device interface as the
+	 * normal CLI: select a view with write(), then collect it with read().
+	 */
 	if (write(fd, cmd, strlen(cmd)) < 0) {
 		perror("write");
 		close(fd);
@@ -240,8 +258,10 @@ static void parse_stats_text(const char *text, struct kb_stats *stats)
 	unsigned int code;
 
 	while (*line) {
-		/* key_N_label=LABEL — must check before key_N= to avoid
-		 * partial match on the code number */
+		/*
+		 * key_N_label=LABEL must be checked before key_N=COUNT so a
+		 * label line is not mistaken for the numeric counter.
+		 */
 		if (sscanf(line, "key_%u_label=%31s", &code, label) == 2 &&
 		    code < KBMON_KEY_COUNT) {
 			snprintf(stats->labels[code], KEY_LABEL_MAX, "%s",
@@ -264,6 +284,11 @@ static int collect_stats(struct kb_stats *stats)
 {
 	char buf[KBMON_READ_BUF];
 
+	/*
+	 * Only summary and key analytics are collected.  The exporter does not
+	 * read /dev/kbmonitor_log or request view text, which keeps reconstructed
+	 * text and local event logs out of the network path.
+	 */
 	memset(stats, 0, sizeof(*stats));
 
 	if (kbmon_read_view("view summary", buf, sizeof(buf)) < 0)
@@ -287,6 +312,7 @@ static void compute_top_keys(const struct kb_stats *stats,
 	int i;
 	int j;
 
+	/* Keep only the top few keys for a compact receiver log. */
 	for (code = 0; code < KBMON_KEY_COUNT; code++) {
 		unsigned long long cnt = stats->counts[code];
 
@@ -319,6 +345,10 @@ static int build_session_start_json(const char *host, int interval_sec,
 	time_t now = time(NULL);
 	size_t len = 0;
 
+	/*
+	 * The first message identifies the client session and records the privacy
+	 * contract that this stream sends statistics, not typed text.
+	 */
 	if (appendf(json, cap, &len,
 		    "{\"schema\":\"kbmonitor.stats.v1\","
 		    "\"type\":\"session_start\","
@@ -354,6 +384,10 @@ static int build_stats_json(const struct kb_stats *stats, const char *host,
 
 	compute_top_keys(stats, top_codes, &top_n);
 
+	/*
+	 * Each snapshot is one newline-terminated JSON object.  This makes the
+	 * Python receiver simple: it can read and log one complete record per line.
+	 */
 	if (appendf(json, cap, &len,
 		    "{\"schema\":\"kbmonitor.stats.v1\","
 		    "\"type\":\"stats_snapshot\","
@@ -454,6 +488,7 @@ static int tcp_connect(const char *host, const char *port)
 	hints.ai_socktype = SOCK_STREAM;
 	hints.ai_family = AF_UNSPEC;
 
+	/* Try every address returned by getaddrinfo so IPv4/IPv6 both work. */
 	err = getaddrinfo(host, port, &hints, &res);
 	if (err) {
 		fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(err));
@@ -480,6 +515,7 @@ static int ssl_write_all(SSL *ssl, const char *buf, size_t len)
 {
 	size_t sent = 0;
 
+	/* SSL_write may write only part of the buffer, so loop until complete. */
 	while (sent < len) {
 		int n = SSL_write(ssl, buf + sent, (int)(len - sent));
 
@@ -508,6 +544,10 @@ static int tls_client_connect(const struct options *opts,
 		return -1;
 	}
 
+	/*
+	 * TLS setup remains in user space.  Keeping OpenSSL out of the kernel
+	 * keeps the driver smaller and avoids doing networking in kernel context.
+	 */
 	ctx = SSL_CTX_new(TLS_client_method());
 	if (!ctx) {
 		close(fd);
@@ -515,6 +555,7 @@ static int tls_client_connect(const struct options *opts,
 	}
 
 	if (opts->ca_file) {
+		/* Verify the server certificate when a CA file is supplied. */
 		if (SSL_CTX_load_verify_locations(ctx, opts->ca_file, NULL) != 1) {
 			ERR_print_errors_fp(stderr);
 			goto out_ctx;
@@ -528,6 +569,7 @@ static int tls_client_connect(const struct options *opts,
 	}
 
 	if (opts->client_cert && opts->client_key) {
+		/* Client certificate/key enable mutual TLS for the coursework demo. */
 		if (SSL_CTX_use_certificate_file(ctx, opts->client_cert,
 						 SSL_FILETYPE_PEM) != 1) {
 			fprintf(stderr, "failed to load client cert: %s\n",
@@ -647,7 +689,7 @@ static int parse_args(int argc, char **argv, struct options *opts)
 	if (opts->interval_sec < 1)
 		opts->interval_sec = 1;
 
-	/* auto-detect certs from default paths only when not using --insecure */
+	/* Auto-detect certs from default paths only when not using --insecure. */
 	if (!opts->insecure) {
 		if (!opts->ca_file && access(DEFAULT_CA_FILE, R_OK) == 0)
 			opts->ca_file = DEFAULT_CA_FILE;
@@ -681,6 +723,10 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
+	/*
+	 * The visible host name in JSON is the Pi/client name, while opts.host is
+	 * the receiver address.  This helps identify the sender in the TLS log.
+	 */
 	(void)gethostname(hostname, sizeof(hostname));
 	hostname[sizeof(hostname) - 1] = '\0';
 
@@ -690,6 +736,7 @@ int main(int argc, char **argv)
 	if (tls_client_connect(&opts, &client) < 0)
 		return 1;
 
+	/* Send a session_start record before periodic statistics snapshots. */
 	if (build_session_start_json(hostname, opts.interval_sec, json,
 				     sizeof(json)) < 0) {
 		fprintf(stderr, "failed to build session start JSON\n");
@@ -709,6 +756,7 @@ int main(int argc, char **argv)
 	while (opts.count == 0 || sample < opts.count) {
 		sleep((unsigned int)opts.interval_sec);
 
+		/* Re-read the character device each interval so snapshots stay live. */
 		if (collect_stats(&stats) < 0) {
 			tls_client_close(&client);
 			return 1;

@@ -5,6 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MODULE="$ROOT/kernel/kbmonitor.ko"
 NEEDS_BUILD=0
 
+# Rebuild automatically if the module is missing or older than the source.
 if [[ ! -f "$MODULE" ]]; then
   echo "[load] $MODULE not found; building first"
   NEEDS_BUILD=1
@@ -26,6 +27,8 @@ fi
 
 sleep 1
 
+# The module creates both devices; relaxed permissions make the demo usable
+# without running every user-space command through sudo.
 if [[ -e /dev/kbmonitor ]]; then
   sudo chmod 666 /dev/kbmonitor
   echo "[load] /dev/kbmonitor is ready"
